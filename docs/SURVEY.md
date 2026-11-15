@@ -134,8 +134,10 @@ heap reallocation. Validated: a 25% rule produced **150 fuel**, a 50% rule 255, 
 build 456; the locator found a new base each time (`fuel_count` matched). If fewer than four records are available it falls back to a
 run scan for `count <= 2048`. The engine emits `fuel_count` and all `count`
 records (with `present`), and merges the packet's velocities/flags when available.
-For 4,000+ fuel the JSON state is large; a compact/binary fuel channel is a
-Phase 2 optimization.
+For 4,000+ fuel the JSON state is large, so the engine has an opt-in
+`--binary` framing: packed 7-byte fuel records (plus a `RSB1` header) immediately
+before the JSON state, and the Rust `Engine` reattaches them. JSON mode remains
+available; `fuel_count` and all records are identical in both.
 
 ### 4.2 Robot poses — live local simulation
 
@@ -181,12 +183,15 @@ matched by the CLI username. This avoids the six-robot "which one is mine"
 failure mode. A `stale` fallback keeps `me` present if a memory read misses one
 frame.
 
-Alliance is currently a **heuristic**: the first pose seen for a robot is at its
-spawn, so `x < 0` is red and `x > 0` is blue. The room state (`0x06`) clearly
-contains seat/alliance data but its seat layout is not fully decoded yet. The
-heuristic is only for convenience; `is_me` is exact. Coordinates are global
-field coordinates. The driver input axes are in the driver's control frame (the
-game handles the red/blue side); a bot planning in global coordinates must use
+Alliance is decoded from the `0x06` room state. Player records appear in seat
+order with the signature `01 <team> 67 01 02 00 00 <name-len> <name...>`;
+`<team>` is 0 for red and 1 for blue. A fresh 4-player capture had seats 0–2 red
+and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
+`engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
+the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
+arrived. `is_me` is exact by username. Coordinates are global field
+coordinates. The driver input axes are in the driver's control frame (the game
+handles the red/blue side); a bot planning in global coordinates must use
 `alliance` when converting. This is called out in `docs/API.md`.
 
 Robot linear/angular velocities are finite differences of the predicted pose
@@ -195,23 +200,34 @@ frames so a stationary robot reports zero instead of noise.
 
 ### 4.3 Match/room state
 
-`0x41` carries the match clock at float offset 10. The clock starts near
-`163.0 s`; there is a **3-second countdown** (robots spawn in), then a 20-second
-auto, then teleop down to 0:
+`0x41` carries the match clock at float offset 10. Full-match HUD captures
+established the structure (clock 163.0 → 0.0):
 
-```
-time > 160   -> countdown
-160 >= time > 140 -> auto
-140 >= time > 0   -> teleop
-else end
-```
+| Clock | HUD label | Duration |
+| --- | --- | --- |
+| 163 → 143 | AUTO | 20 s |
+| 143 → 140 | FIELD RESET | 3 s |
+| 140 → 130 | TRANSITION | 10 s |
+| 130 → 105 | SHIFT 1 | 25 s |
+| 105 → 80 | SHIFT 2 | 25 s |
+| 80 → 55 | SHIFT 3 | 25 s |
+| 55 → 30 | SHIFT 4 | 25 s |
+| 30 → 0 | ENDGAME | 30 s |
 
-**Driver input is allowed during auto** (by design, so path planning is not the
-whole game). The engine does not gate inputs on teleop; the CLI demo starts in
-auto. Only the 3-second countdown is non-interactive. `0x06` carries room code,
-host, seats, names, teams, robot ids, and spawn selections. `rbTrack` events
-(`page_view`, `match_start`, `room_join`) are a convenient blind-UI feedback
-channel while automating the menu.
+The first ~3 s of auto are the robot spawn delay; driver input is allowed for
+the rest of auto and all of teleop. Field reset is non-interactive. The engine
+reports `phase` (countdown/auto/teleop/end) and the detailed `substage`.
+
+Scores are u16 fields in `0x41`: red total at `+14`, blue total at `+16`, red
+auto at `+18`, blue auto at `+28`. This was verified against the HUD in the same
+full-match capture (e.g. HUD RED 5/BLUE 3 with `+14=5,+16=3`; the auto fields
+froze at 5/3 while teleop scores continued to 6/5). The engine emits
+`red_score`/`blue_score`, `auto_red_score`/`auto_blue_score`, a `score` event on
+change, and `substage_remaining`.
+
+`0x06` carries room code, host, seat records, names, team flags, robot ids, and
+spawn selections. `rbTrack` events (`page_view`, `match_start`, `room_join`) are
+a convenient blind-UI feedback channel while automating the menu.
 
 ## 5. Control
 
@@ -385,7 +401,8 @@ visible anti-automation check. Treat this as a community service:
 | Live robot pose, velocities, `me` identity | 1–2 days (done; ~48 Hz predicted) |
 | Dynamic fuel count + base locator | 1 day (done) |
 | Virtual gamepad (axes + intake/outtake/shoot) | 1–2 days (done) |
-| 6-bot identity/alliance verification | 2–3 days |
+| 4-bot identity/alliance + blue controls | 2–3 days (done) |
+| 6-bot identity/alliance on local server | 1–2 days remaining |
 | Rust CLI + JSON API + docs | 3–5 days (mostly done) |
 | Version/build handling + local server | 1–2 days |
 | Spawnpoint selection (deferred) | 1–2 days |
@@ -393,27 +410,114 @@ visible anti-automation check. Treat this as a community service:
 | Pure Rust Wasmtime engine (Phase 2) | 1–3 weeks |
 | Pure Rust physics reimplementation | months, not recommended |
 
-The networking, lobby automation, fuel, gamepad actions, and predicted pose are
-solved. The remaining work is **multi-bot validation** (six robots, red/blue
-alliance frames, making sure each CLI instance controls exactly its own robot)
-and **version drift** (memory signatures/protocol after a game update).
+The networking, lobby automation, fuel, scores/substages, gamepad actions,
+predicted pose, seat decoding, 4-bot identity, and blue controls are solved. The
+remaining work is **six-bot validation on the local server** and **version
+drift** (memory signatures/protocol after a game update); the build pin now
+fails fast when the live `BUILD` differs.
 
 ## 11. Recommended next steps
 
 1. Stabilize the current engine API (JSON lines): `join`, `ready`, `start`,
    `state`, `input`, `leave`; keep `me`/`is_me` authoritative.
 2. Run a six-bot private match **on the local server** (the public per-IP limit
-   blocks six Node clients from one address) and verify `is_me`, alliance
-   inference, and red/blue control-frame conversion for every instance. Add a
-   fail-fast check if `me` is missing or duplicated.
-3. Add a version/build check: fetch the page, parse `BUILD="..."`, download the
-   matching `index.js`/`index.wasm`, and refuse to run if the server version
-   differs.
-4. Point the engine at the team lead's local server (`--server`) and compare its
+   blocks six Node clients from one address) and repeat the 4-bot checks:
+   `is_me`, the `0x06` seat alliance, and red/blue movement. The 4-bot version is
+   done (see §12).
+3. Point the engine at the team lead's local server (`--server`) and compare its
    packet/state behavior with the public server.
-5. Add an offline/high-speed `step(n)` mode with a virtual clock for ML
+4. Add an offline/high-speed `step(n)` mode with a virtual clock for ML
    training; this is separate from the real-time multiplayer bot.
-6. Revisit spawnpoint selection (`0x07` + field map) only if inferring the spawn
+5. Revisit spawnpoint selection (`0x07` + field map) only if inferring the spawn
    from the first pose is not enough.
-7. Hand the Rust `Engine`/`GameState`/`Input` API to the ML lead and the
+6. Hand the Rust `Engine`/`GameState`/`Input` API to the ML lead and the
    procedural bot team.
+
+
+## 12. Verification log
+
+These are the reproducible checks used for the current build (`4a8a0e8`).
+
+### 0x06 seat parser
+
+`node engine/room06_test.cjs` parses a synthetic 4-seat packet and the captured
+live packet. Captured result:
+
+```
+seat 0 HostA  team=0 red
+seat 1 RedB   team=0 red
+seat 2 RedC   team=0 red
+seat 3 BlueD  team=1 blue
+room06 tests OK
+```
+
+The blue client's HUD showed the blue "YOU" robot at the blue driver station
+(live screenshots are kept under `/tmp/opencode` during testing). No manual seat
+move was needed; the fourth joiner is blue in a fresh room.
+
+### 4-client identity / control test
+
+`engine/multibot_browser.mjs` starts an engine host plus three browser clients
+in separate contexts, starts the match, then drives red host and blue tab
+forward. Output:
+
+```
+SEATS [{"seat":0,"name":"RedHost",...red},
+       {"seat":1,"name":"RedB",...red},
+       {"seat":2,"name":"RedC",...red},
+       {"seat":3,"name":"BlueD","team_flag":1,"alliance":"blue"}]
+STATE robots: RedHost red me=true, RedB red, RedC red, BlueD blue
+DELTA red  {"dx":3.815,"dy":0}
+DELTA blue {"dx":-10.396,"dy":0}
+VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
+         "hostMe":true,"robots4":true,"redForward":true,"blueForward":true}
+```
+
+This proves:
+- four unique names occupy four seats;
+- the host engine's `me` is exactly its own robot and it sees all four;
+- the fourth seat is blue from the `0x06` team flag;
+- forward (`y=1` / W) increases global x for red and **decreases** global x
+  for blue, so `field_to_driver` is correct for this build.
+
+### Scores / time / substages
+
+A full browser match captured every `0x41` frame plus periodic HUD screenshots.
+The HUD labels and match-clock boundaries matched the substage table in §4.3.
+Score fields were validated directly:
+
+| Clock | HUD | `+14` red | `+16` blue | `+18` auto red | `+28` auto blue |
+| --- | --- | --- | --- | --- | --- |
+| 162.97 | RED 0 / BLUE 0 | 0 | 0 | 0 | 0 |
+| 157.03 | RED 1 / BLUE 2 | 1 | 2 | 1 | 2 |
+| 150.97 | RED 2 / BLUE 3 | 2 | 3 | 2 | 3 |
+| 136.57 (teleop) | RED 6 / BLUE 4 | 6 | 4 | 5 | 3 |
+| 131.57 (shift 1) | RED 6 / BLUE 6 | 6 | 6 | 5 | 3 |
+
+The auto columns freeze at the end of auto while the totals continue.
+
+### Binary fuel + build pin
+
+`node engine/binary_test.cjs`:
+
+```
+OK binary state {"seq":0,"phase":"countdown","substage":"auto",
+ "fuel_count":150,"fuel_bin":true,"fuel_frames":1,"json_frames":9,
+ "scores":{"red":0,"blue":0},"time":163}
+packed records 150
+```
+
+Build drift checks:
+
+```
+$ node headless.cjs --expect-build deadbee ...
+build pin failed: assets are 4a8a0e8 but --expect-build is deadbee
+exit=3
+
+$ # build.json = deadbee, live page = 4a8a0e8
+build drift: assets are deadbee but server is 4a8a0e8 - run node prepare.mjs
+exit=3
+```
+
+The Rust CLI propagates those exit codes (verified `--expect-build deadbee`
+→ shell exit 3).

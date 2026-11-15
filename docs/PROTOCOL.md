@@ -51,7 +51,19 @@ C→S 07 00 00 67 01 00 00 01 16 62 c2 95 00 80
 ```
 
 The `0x06` room state contains the room code, host id, seats, display names,
-teams, robot ids, and spawn selections. Names are printable ASCII, zero-padded.
+teams, robot ids, and spawn selections. Player records appear in **seat order**
+and have this signature:
+
+```
+01 <team> 67 01 02 00 00 <name-len> <name...>
+```
+
+`<team>` is `0` for red and `1` for blue. A fresh 4-player room was captured as
+seats 0–2 red (`team=0`) and seat 3 blue (`team=1`), matching the blue client's
+HUD. The engine parses this with `engine/room06.cjs` and exposes `seats` plus
+per-robot `alliance_source: "room"`. The seat-order fallback (first 3 red, next
+3 blue) is used only if the team byte is absent.
+
 The `0x07` seats the joining player; the last `00 80` is part of the selection
 (spawn/robot), not yet fully decoded.
 
@@ -130,14 +142,69 @@ The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
 
 ### 1.6 Match/room state (`0x41`, 154–340 bytes)
 
-- `u8 0x41`, `u32 tick`, then a float match clock at offset 10
-  (e.g. `c8 09 0f 43` = 143.0 s remaining).
-- The clock starts at ~163 s: 3-second countdown (>160), 20-second auto
-  (160→140), teleop (140→0). **Driver input works during auto**; only the
-  countdown is non-interactive. The engine uses this to set `phase`.
-- The rest is settings, scores, seat/robot state. The packet grows when
+- `u8 0x41`, `u32 tick`, a float countdown at offset 6 (used before the clock
+  starts), then a float match clock at offset 10 (e.g. `c8 09 0f 43` = 143.0 s).
+- The match clock starts at **163.0 s**. Verified against the HUD in a full
+  match capture:
+
+  | Clock | Substage | Duration |
+  | --- | --- | --- |
+  | 163 → 143 | auto | 20 s |
+  | 143 → 140 | field reset | 3 s |
+  | 140 → 130 | transition | 10 s |
+  | 130 → 105 | shift 1 | 25 s |
+  | 105 → 80 | shift 2 | 25 s |
+  | 80 → 55 | shift 3 | 25 s |
+  | 55 → 30 | shift 4 | 25 s |
+  | 30 → 0 | endgame | 30 s |
+
+- **Scores** (u16, verified against the HUD screenshots):
+
+  ```
+  +14  red total score
+  +16  blue total score
+  +18  red auto score   (freezes when auto ends)
+  +28  blue auto score  (freezes when auto ends)
+  ```
+
+  Example: during auto the HUD showed RED 1 / BLUE 2 and the packet had
+  `14=1, 16=2`; after teleop scoring it showed RED 2 / BLUE 3 with
+  `14=2, 16=3`, while `+18/+28` stayed at the auto values.
+- Driver input works during auto; the first ~3 s of auto are the spawn delay
+  before robots respond. The field reset at 143→140 is non-interactive.
+- The rest is settings, seat/robot state. The packet grows when
   spectators/players join (154 → 224/228 → 340 bytes).
 - This is **not** robot pose state.
+
+### 1.7 Engine binary channel (`--binary`)
+
+The engine's stdout is normally newline-delimited JSON. With `--binary` every
+message is framed so that 4,000+ fuel records do not dominate the stream:
+
+```
+offset 0  magic "RSB1"
+offset 4  u8 framing version (1)
+offset 5  u8 kind: 1 = JSON event, 2 = packed fuel
+offset 6  u16 reserved (0)
+offset 8  u32 payload length
+offset 12 u32 state sequence (0 for non-state events)
+payload
+```
+
+The packed-fuel payload mirrors the wasm array:
+
+```
+u16 count
+u16 record size (7)
+u32 reserved
+count × 7 bytes: present u8, x u16, y u16, z u16
+  x/y/z = (value - 0x8000) / 4096 m; bottom of the fuel, add 0.045 m for z
+```
+
+The engine emits the fuel frame immediately before the matching JSON `state`
+frame; that state has `"fuel_bin": true` and an empty `fuel` array. The Rust
+`Engine` reader attaches the packed fuel to the state. JSON mode (`--binary`
+omitted) remains fully compatible.
 
 ### 1.7 Other observed packets
 

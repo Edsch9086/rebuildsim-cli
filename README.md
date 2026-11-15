@@ -42,10 +42,14 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
-| Robot identity | ✅ `me` + `is_me` by username; alliance heuristic |
+| Robot identity | ✅ `me` + `is_me` by username |
+| Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); seat 4 blue confirmed |
+| Scores / time / substages | ✅ `0x41` scores + full substage table |
+| Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
-| Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop |
+| Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop + substages |
+| Build pin / drift fail-fast | ✅ `build.json` + live check + `--expect-build` |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | ✅ host UI flow; 25% → 150 fuel validated |
@@ -60,7 +64,10 @@ node headless.cjs --code <LOBBY> --username MyBot
 ```
 
 The engine prints JSON lines on stdout and accepts JSON commands on stdin.
-Use `--create` to make a room, and `--start` to start it as host.
+Use `--create` to make a room, and `--start` to start it as host. `--binary`
+switches to framed stdout with packed fuel records (the Rust CLI uses this by
+default). `--expect-build <hash>` pins the downloaded build; startup fails with
+exit 3 if the live server build differs.
 
 Rust CLI (from the repo root):
 
@@ -74,7 +81,8 @@ cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --d
 If the engine assets live somewhere else, pass `--asset-dir <DIR>` or set
 `RB_ASSET_DIR`. The engine uses the current build downloaded by `prepare.mjs`.
 To point at a locally hosted server build, pass `--server <host:port>` to the
-engine (the CLI will expose this once the team lead's server is ready).
+engine or the Rust CLI. For repeated multi-bot tests, use that local server; the
+public server enforces a per-IP connection limit.
 
 See `docs/SURVEY.md` for the architecture discussion, `docs/PROTOCOL.md` for
 the packet/memory details, and `docs/API.md` for the engine/CLI API.

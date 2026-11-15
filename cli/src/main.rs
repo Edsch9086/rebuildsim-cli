@@ -9,7 +9,9 @@
 //! a state/input API. Bot logic lives here; the engine handles the game UI,
 //! netcode, simulation, and state extraction.
 
-use rebuildsim_cli::engine::{default_engine_path, find_me, Engine, EngineEvent, EngineOptions, GameState, Input};
+use rebuildsim_cli::engine::{
+    Engine, EngineEvent, EngineOptions, GameState, Input, default_engine_path, find_me,
+};
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -29,6 +31,9 @@ struct Args {
     keyboard: bool,
     fuel: Option<String>,
     server: Option<String>,
+    binary: bool,
+    expect_build: Option<String>,
+    no_build_check: bool,
 }
 
 impl Default for Args {
@@ -48,6 +53,9 @@ impl Default for Args {
             keyboard: false,
             fuel: None,
             server: None,
+            binary: true,
+            expect_build: None,
+            no_build_check: false,
         }
     }
 }
@@ -69,12 +77,15 @@ OPTIONS:
   --emit-hz <N>       state rate from the engine (default: 10)
   --asset-dir <DIR>   directory containing index.js/index.wasm (default: engine/cache)
   --engine <PATH>     path to engine/headless.cjs
-  --demo              run a short forward/strafe/reverse/turn diagnostic in teleop
+  --demo              run a short forward/strafe/reverse/turn diagnostic (auto/teleop)
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
   --keyboard          use digital keyboard controls instead of the virtual gamepad
   --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, ...)
   --server <HOST:PORT> connect to a local server build
+  --json              use newline JSON (default is the binary fuel channel)
+  --expect-build <H>  fail fast unless the cached build hash matches H
+  --no-build-check    skip the live server BUILD comparison
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -87,7 +98,10 @@ fn parse_args() -> Result<Args, String> {
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "-h" | "--help" => { usage(); std::process::exit(0); }
+            "-h" | "--help" => {
+                usage();
+                std::process::exit(0);
+            }
             "--code" => a.code = Some(it.next().ok_or("--code needs a value")?),
             "--username" => a.username = it.next().ok_or("--username needs a value")?,
             "--spawnpoint" => a.spawnpoint = Some(it.next().ok_or("--spawnpoint needs a value")?),
@@ -99,10 +113,21 @@ fn parse_args() -> Result<Args, String> {
             "--keyboard" => a.keyboard = true,
             "--fuel" => a.fuel = Some(it.next().ok_or("--fuel needs a value")?),
             "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
-            "--emit-hz" => {
-                a.emit_hz = it.next().ok_or("--emit-hz needs a value")?.parse().map_err(|_| "bad --emit-hz")?
+            "--json" => a.binary = false,
+            "--expect-build" => {
+                a.expect_build = Some(it.next().ok_or("--expect-build needs a value")?)
             }
-            "--asset-dir" => a.asset_dir = Some(PathBuf::from(it.next().ok_or("--asset-dir needs a value")?)),
+            "--no-build-check" => a.no_build_check = true,
+            "--emit-hz" => {
+                a.emit_hz = it
+                    .next()
+                    .ok_or("--emit-hz needs a value")?
+                    .parse()
+                    .map_err(|_| "bad --emit-hz")?
+            }
+            "--asset-dir" => {
+                a.asset_dir = Some(PathBuf::from(it.next().ok_or("--asset-dir needs a value")?))
+            }
             "--engine" => a.engine = PathBuf::from(it.next().ok_or("--engine needs a value")?),
             other => return Err(format!("unknown argument: {other}")),
         }
@@ -116,6 +141,17 @@ fn parse_args() -> Result<Args, String> {
     Ok(a)
 }
 
+fn print_seats(seats: &[rebuildsim_cli::engine::Seat]) {
+    if seats.is_empty() {
+        return;
+    }
+    let s: Vec<String> = seats
+        .iter()
+        .map(|x| format!("{}={}({})", x.seat, x.name, x.alliance))
+        .collect();
+    println!("seats: {}", s.join(" "));
+}
+
 fn print_state(state: &GameState, username: &str) {
     let me = state.me.as_ref().or_else(|| find_me(state, username));
     let me_s = match me {
@@ -125,13 +161,18 @@ fn print_state(state: &GameState, username: &str) {
         ),
         None => "me=?".to_string(),
     };
-    let time = state.time.map(|t| format!("{t:.1}s")).unwrap_or_else(|| "?".to_string());
+    let time = state
+        .time
+        .map(|t| format!("{t:.1}s"))
+        .unwrap_or_else(|| "?".to_string());
     let fuel_count = state.fuel_count.unwrap_or(0);
     println!(
-        "state #{:<5} phase={:<9} time={:<7} robots={:<2} fuel={}/{} {}",
+        "state #{:<5} {:<10} t={:<7} score={}-{} robots={:<2} fuel={}/{} {}",
         state.seq,
-        state.phase,
+        format!("{}/{}", state.phase, state.substage),
         time,
+        state.red_score,
+        state.blue_score,
         state.robots.len(),
         state.fuel.len(),
         fuel_count,
@@ -167,6 +208,9 @@ fn main() {
     opts.gamepad = !args.keyboard;
     opts.fuel = args.fuel.clone();
     opts.server = args.server.clone();
+    opts.binary = args.binary;
+    opts.expect_build = args.expect_build.clone();
+    opts.no_build_check = args.no_build_check;
 
     eprintln!("engine: {}", args.engine.display());
     let mut engine = match Engine::spawn(&opts) {
@@ -187,16 +231,31 @@ fn main() {
     loop {
         match engine.next_event() {
             Ok(Some(EngineEvent::Ready { build })) => {
-                eprintln!("engine ready (build {})", build.unwrap_or_else(|| "?".into()));
+                eprintln!(
+                    "engine ready (build {})",
+                    build.unwrap_or_else(|| "?".into())
+                );
             }
-            Ok(Some(EngineEvent::Room { code, host, seated, role })) => {
+            Ok(Some(EngineEvent::Room {
+                code,
+                host,
+                seated,
+                role,
+                seats,
+            })) => {
                 println!(
                     "joined room {code} host={host} seated={seated} role={}",
                     role.unwrap_or_else(|| "?".into())
                 );
+                print_seats(&seats);
             }
-            Ok(Some(EngineEvent::Match { phase, time })) => {
+            Ok(Some(EngineEvent::Seats { code, seats })) => {
+                println!("room {code} seats updated");
+                print_seats(&seats);
+            }
+            Ok(Some(EngineEvent::Match { phase, time, seats })) => {
                 println!("match started phase={phase} time={time:?}");
+                print_seats(&seats);
             }
             Ok(Some(EngineEvent::State(state))) => {
                 states += 1;
@@ -210,9 +269,43 @@ fn main() {
                     }
                 }
             }
+            Ok(Some(EngineEvent::Build {
+                build,
+                server_build,
+                ok,
+            })) => {
+                println!(
+                    "build {} (server {})",
+                    build,
+                    server_build.unwrap_or_else(|| "?".into())
+                );
+                if !ok {
+                    eprintln!("build check failed");
+                }
+            }
+            Ok(Some(EngineEvent::Protocol { version })) => {
+                println!("protocol version {version:?}");
+            }
+            Ok(Some(EngineEvent::Score {
+                red,
+                blue,
+                auto_red,
+                auto_blue,
+            })) => {
+                println!("score red={red} blue={blue} auto={auto_red}/{auto_blue}");
+            }
+            Ok(Some(EngineEvent::Error { error })) => {
+                eprintln!("engine error: {error}");
+            }
             Ok(Some(EngineEvent::Pong { .. })) | Ok(Some(EngineEvent::Other)) => {}
             Ok(None) => {
-                eprintln!("engine exited");
+                let code = engine.wait_code();
+                eprintln!("engine exited code={code:?}");
+                if let Some(c) = code {
+                    if c != 0 {
+                        std::process::exit(c);
+                    }
+                }
                 break;
             }
             Err(e) => {
@@ -241,20 +334,78 @@ impl Demo {
     }
 
     fn tick(&mut self, engine: &mut Engine, _state: &GameState) -> std::io::Result<()> {
-        let Some(start) = self.start else { return Ok(()); };
+        let Some(start) = self.start else {
+            return Ok(());
+        };
         let e = start.elapsed().as_secs_f32();
         let step = |engine: &mut Engine, input: Input| -> std::io::Result<()> {
             engine.send_input(&input)
         };
         match self.phase {
-            0 if e >= 0.5 => { eprintln!("demo: forward"); step(engine, Input { y: 1.0, ..Default::default() })?; self.phase = 1; }
-            1 if e >= 3.0 => { eprintln!("demo: stop"); step(engine, Input::default())?; self.phase = 2; }
-            2 if e >= 4.5 => { eprintln!("demo: strafe right"); step(engine, Input { x: 1.0, ..Default::default() })?; self.phase = 3; }
-            3 if e >= 6.5 => { eprintln!("demo: stop"); step(engine, Input::default())?; self.phase = 4; }
-            4 if e >= 8.0 => { eprintln!("demo: reverse"); step(engine, Input { y: -1.0, ..Default::default() })?; self.phase = 5; }
-            5 if e >= 10.0 => { eprintln!("demo: stop"); step(engine, Input::default())?; self.phase = 6; }
-            6 if e >= 11.0 => { eprintln!("demo: turn"); step(engine, Input { rotate: 1.0, ..Default::default() })?; self.phase = 7; }
-            7 if e >= 13.0 => { eprintln!("demo: stop/done"); step(engine, Input::default())?; self.phase = 8; }
+            0 if e >= 0.5 => {
+                eprintln!("demo: forward");
+                step(
+                    engine,
+                    Input {
+                        y: 1.0,
+                        ..Default::default()
+                    },
+                )?;
+                self.phase = 1;
+            }
+            1 if e >= 3.0 => {
+                eprintln!("demo: stop");
+                step(engine, Input::default())?;
+                self.phase = 2;
+            }
+            2 if e >= 4.5 => {
+                eprintln!("demo: strafe right");
+                step(
+                    engine,
+                    Input {
+                        x: 1.0,
+                        ..Default::default()
+                    },
+                )?;
+                self.phase = 3;
+            }
+            3 if e >= 6.5 => {
+                eprintln!("demo: stop");
+                step(engine, Input::default())?;
+                self.phase = 4;
+            }
+            4 if e >= 8.0 => {
+                eprintln!("demo: reverse");
+                step(
+                    engine,
+                    Input {
+                        y: -1.0,
+                        ..Default::default()
+                    },
+                )?;
+                self.phase = 5;
+            }
+            5 if e >= 10.0 => {
+                eprintln!("demo: stop");
+                step(engine, Input::default())?;
+                self.phase = 6;
+            }
+            6 if e >= 11.0 => {
+                eprintln!("demo: turn");
+                step(
+                    engine,
+                    Input {
+                        rotate: 1.0,
+                        ..Default::default()
+                    },
+                )?;
+                self.phase = 7;
+            }
+            7 if e >= 13.0 => {
+                eprintln!("demo: stop/done");
+                step(engine, Input::default())?;
+                self.phase = 8;
+            }
             _ => {}
         }
         Ok(())

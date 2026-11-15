@@ -15,49 +15,79 @@ opts.code = Some("ABCDE".into());      // or opts.create = true
 opts.start = false;                     // host only
 opts.emit_hz = 30;
 opts.gamepad = true;                    // analog; false = keyboard
+opts.binary = true;                     // packed fuel frames (default)
 let mut engine = Engine::spawn(&opts)?;
 
 while let Some(state) = engine.next_state()? {
     let me = state.me.as_ref().expect("our robot");
-    // ... compute a command in the driver frame ...
+    // state.scores, state.substage, state.time ...
     engine.send_input(&Input { y: 1.0, ..Default::default() })?;
 }
 ```
 
-`GameState`:
+### `GameState`
 
 ```rust
 pub struct GameState {
     pub seq: u64,
     pub t: f64,               // unix seconds
-    pub phase: String,        // "countdown" | "auto" | "teleop" | "end" | "match"
-    pub time: Option<f64>,    // match clock from 0x41
+    pub phase: String,        // "countdown" | "auto" | "teleop" | "end"
+    pub substage: String,     // "auto" | "field_reset" | "transition" |
+                              // "shift1".."shift4" | "endgame" | "end"
+    pub time: Option<f64>,    // match clock from 0x41 (163.0 -> 0.0)
+    pub time_remaining: Option<f64>,      // same value, explicit name
+    pub substage_remaining: Option<f64>,  // seconds until the next boundary
+    pub red_score: u16,
+    pub blue_score: u16,
+    pub auto_red_score: u16,  // frozen at the end of auto
+    pub auto_blue_score: u16,
+    pub protocol: Option<u8>,
     pub me: Option<Robot>,    // the robot owned by this CLI instance
     pub robots: Vec<Robot>,
     pub fuel: Vec<Fuel>,
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
+    pub fuel_bin: bool,          // fuel arrived on the binary channel
 }
 ```
 
-`Robot`:
+Verified substage boundaries (from a full HUD capture):
+
+| Clock | Substage |
+| --- | --- |
+| 163 → 143 | `auto` (20 s) |
+| 143 → 140 | `field_reset` (3 s) |
+| 140 → 130 | `transition` (10 s) |
+| 130 → 105 | `shift1` |
+| 105 → 80 | `shift2` |
+| 80 → 55 | `shift3` |
+| 55 → 30 | `shift4` |
+| 30 → 0 | `endgame` |
+
+`red_score`/`blue_score` are the live totals displayed on the HUD. The auto
+scores freeze when auto ends.
+
+### `Robot`
 
 ```rust
 pub struct Robot {
     pub name: String,
     pub is_me: bool,
-    pub alliance: String,     // "red" | "blue" (spawn-x heuristic)
+    pub alliance: String,     // "red" | "blue"
+    pub alliance_source: String, // "room" (0x06 seats) | "spawn"
     pub x: f32, pub y: f32, pub z: f32,
     pub heading: f32,         // radians
     pub vx: f32, pub vy: f32, pub vz: f32,
     pub yaw_rate: f32,
-    pub pose_source: String, // "predicted" (render copy, ~48 Hz) | "acked"
+    pub pose_source: String,  // "predicted" (render copy, ~48 Hz) | "acked"
 }
 ```
 
 `Fuel`: `id, x, y, z, present`, plus optional `vx, vy, vz, count, flags` merged
 from the server packet. The array length is `fuel_count`, not a fixed 456.
 
-`Input`: `x, y, rotate, intake, outtake, shoot`. With the virtual gamepad:
+### `Input`
+
+`Input` has `x, y, rotate, intake, outtake, shoot`. With the virtual gamepad:
 
 - `x` left stick X (strafe/right)
 - `y` left stick Y (forward; the engine sends `-y`)
@@ -65,17 +95,16 @@ from the server packet. The array length is `fuel_count`, not a fixed 456.
 - `intake` LT, `outtake` LB, `shoot` RT
 
 `shoot` is a trigger. The game auto-aims turreted robots and auto-turns dumper
-robots; do not synthesize an aim angle. Driver input works during **auto**; only
-the 3-second countdown is non-interactive. Use `phase` if you want to wait for
-auto/teleop.
+robots; do not synthesize an aim angle. Driver input works during **auto**; the
+first ~3 s of auto are the spawn delay. `field_reset` is non-interactive.
 
 ### Identity and alliance
 
-`state.me` and `Robot.is_me` are authoritative: they come from matching the
-CLI username against the live player state in wasm memory. In a six-robot lobby,
-always read `me` rather than indexing `robots[0]` or guessing by team.
+`state.me`, `Robot.is_me`, and `alliance_source: "room"` are authoritative.
+`me` is matched against the CLI username in the live player state; alliance
+comes from the `0x06` seat record. In a six-robot lobby, always read `me`
+rather than indexing `robots[0]` or guessing by team.
 
-`alliance` is currently a first-sight spawn-x heuristic (`x<0` red, `x>0` blue).
 Global poses are field coordinates. The driver input axes are in the driver
 control frame; the game handles the red/blue side. Use the helpers:
 
@@ -85,24 +114,31 @@ engine.send_input(&Input { x: dx, y: dy, ..Default::default() })?;
 ```
 
 `field_to_driver` rotates 180° for blue; `alliance_heading` does the same for a
-heading. This is based on the red observation and the expected blue inversion;
-validate it against a blue client. The room state (`0x06`) contains the real
-seat/alliance assignment; decoding it is a TODO.
+heading. This is validated for red; blue is the expected inversion and should
+be re-checked whenever the game changes. The 4-player seat test showed seat 4
+as blue (`team=1`), so a fourth bot in a fresh lobby is blue without moving.
 
-## Engine JSON lines (stdio)
+## Engine JSON lines (stdio, default)
 
 Engine → CLI:
 
 ```json
-{"type":"ready","build":"4a8a0e8"}
-{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver"}
-{"type":"match","phase":"countdown","time":null}
-{"type":"state","seq":42,"t":1794772715.59,"phase":"auto","time":158.8,
- "fuel_count":456,
- "me":{"name":"MyBot","is_me":true,"alliance":"red","x":-4.67,"y":3.40,
+{"type":"ready","build":"4a8a0e8","binary":false}
+{"type":"build","build":"4a8a0e8","server_build":"4a8a0e8","ok":true}
+{"type":"protocol","version":1}
+{"type":"seats","code":"ABCDE","seats":[
+  {"seat":0,"name":"MyBot","team_flag":0,"alliance":"red"}]}
+{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
+{"type":"match","phase":"auto","substage":"auto","time":163.0,"seats":[...]}
+{"type":"score","seq":42,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
+{"type":"state","seq":42,"t":1794772715.59,"phase":"auto","substage":"auto",
+ "time":158.8,"time_remaining":158.8,"substage_remaining":15.8,
+ "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
+ "scores":{"red":7,"blue":4},"protocol":1,"fuel_count":456,
+ "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
+       "pose_source":"predicted","x":-4.67,"y":3.40,
        "z":0.0,"heading":-1.18,"vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0},
- "robots":[{"name":"MyBot","is_me":true,"alliance":"red","x":-4.67,"y":3.40,
-            "z":0.0,"heading":-1.18,"vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0}],
+ "robots":[...],
  "fuel":[{"id":0,"x":-0.366,"y":-1.0466,"z":0.0748,"present":true,
           "vx":0.0,"vy":0.0,"vz":0.0,"count":1,"flags":0}]}
 ```
@@ -117,21 +153,48 @@ CLI → engine:
 {"type":"leave"}
 {"type":"quit"}
 {"type":"ping"}
+{"type":"dump06","path":"/tmp/room06.bin"}
 ```
 
 The raw `pad` command is for diagnostics; normal bot code should use `input`.
+`dump06` writes the latest raw `0x06` room packet for offline seat analysis.
+
+### Binary mode (`--binary`)
+
+The Rust `Engine` passes `--binary` by default. Engine stdout then uses 16-byte
+`RSB1` frames: kind 1 is a JSON event, kind 2 is packed fuel (7 bytes/record).
+The fuel frame carries the same sequence number as the following state; that
+state has `"fuel_bin": true` and `"fuel": []`, and the Rust reader reattaches
+the decoded array. See `docs/PROTOCOL.md` §1.7 for the byte layout. Use
+`EngineOptions.binary = false` to get plain JSON lines.
+
+## Build pinning
+
+`engine/prepare.mjs` writes `cache/build.json` with the downloaded `BUILD` hash.
+At startup the engine fetches the page and compares the live `BUILD`:
+
+- mismatch → emits `{"type":"error","error":"build_drift",...}` and exits `3`;
+- `--expect-build <hash>` checks the cached assets before connecting and exits
+  `3` on mismatch;
+- `--no-build-check` skips the live fetch (offline/local debugging).
+
+The `0x21` protocol hello must report version `1`; a mismatch is a hard error
+(`exit 4`).
 
 ## Known limitations / next work
 
 - `--spawnpoint` is deferred. The engine joins with the default seat and logs
   that the flag is ignored; a tuned bot can infer its spawn from `me`.
-- `alliance` is a heuristic until `0x06` seat decoding is finished.
-- Six-robot identity/team validation is the next milestone; `me`/`is_me` is the
-  primary safety mechanism.
+- Blue control-frame inversion is implemented and the 4th seat is confirmed
+  blue, but a blue drive-direction assertion needs a 4-client lobby (the public
+  per-IP limit blocks repeated 4-client runs).
+- Six-robot identity/team validation should be repeated on the team lead's
+  local server; `me`/`is_me` and the `0x06` seat parser are the safety
+  mechanisms.
 - The engine prefers the render-region **predicted pose** (~48 Hz) and reports
   `pose_source`. It falls back to the ~15 Hz acked copy if the render copy is
   missing. A 10–30 Hz `emit_hz` is enough; velocities use the last changed pose.
 - The engine is Node + wasm. A native Wasmtime engine is the Phase 2
-  optimization; the JSON API is designed to survive that swap.
+  optimization; the JSON/binary API is designed to survive that swap.
 - Point at a locally hosted server with `--server <host:port>`; the engine sets
   `location.host`/protocol accordingly.

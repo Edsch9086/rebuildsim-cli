@@ -23,6 +23,9 @@ pub struct EngineOptions {
     pub gamepad: bool,
     pub fuel: Option<String>,
     pub server: Option<String>,
+    pub binary: bool,
+    pub expect_build: Option<String>,
+    pub no_build_check: bool,
 }
 
 impl EngineOptions {
@@ -40,6 +43,9 @@ impl EngineOptions {
             gamepad: true,
             fuel: None,
             server: None,
+            binary: true,
+            expect_build: None,
+            no_build_check: false,
         }
     }
 }
@@ -51,6 +57,9 @@ pub struct Robot {
     pub is_me: bool,
     #[serde(default)]
     pub alliance: String,
+    /// "room" when decoded from the 0x06 seat records, "spawn" for the fallback.
+    #[serde(default)]
+    pub alliance_source: String,
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -87,8 +96,12 @@ impl Robot {
     pub fn alliance_heading(&self) -> f32 {
         if self.is_blue() {
             let mut h = self.heading + std::f32::consts::PI;
-            while h > std::f32::consts::PI { h -= 2.0 * std::f32::consts::PI; }
-            while h < -std::f32::consts::PI { h += 2.0 * std::f32::consts::PI; }
+            while h > std::f32::consts::PI {
+                h -= 2.0 * std::f32::consts::PI;
+            }
+            while h < -std::f32::consts::PI {
+                h += 2.0 * std::f32::consts::PI;
+            }
             h
         } else {
             self.heading
@@ -121,6 +134,29 @@ pub struct GameState {
     pub robots: Vec<Robot>,
     #[serde(default)]
     pub fuel: Vec<Fuel>,
+    /// Detail phase from the 0x41 match clock.
+    #[serde(default)]
+    pub substage: String,
+    /// Seconds remaining in the match (same as `time`).
+    #[serde(default)]
+    pub time_remaining: Option<f64>,
+    /// Seconds until the next substage boundary.
+    #[serde(default)]
+    pub substage_remaining: Option<f64>,
+    #[serde(default)]
+    pub red_score: u16,
+    #[serde(default)]
+    pub blue_score: u16,
+    #[serde(default)]
+    pub auto_red_score: u16,
+    #[serde(default)]
+    pub auto_blue_score: u16,
+    /// Server protocol version from 0x21.
+    #[serde(default)]
+    pub protocol: Option<u8>,
+    /// True when `fuel` was delivered on the binary channel (fuel is empty).
+    #[serde(default)]
+    pub fuel_bin: bool,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -139,6 +175,15 @@ pub struct Input {
     pub shoot: bool,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Seat {
+    pub seat: u32,
+    pub name: String,
+    #[serde(default)]
+    pub team_flag: u8,
+    pub alliance: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type")]
 pub enum EngineEvent {
@@ -150,11 +195,43 @@ pub enum EngineEvent {
         host: bool,
         seated: bool,
         role: Option<String>,
+        #[serde(default)]
+        seats: Vec<Seat>,
     },
+    #[serde(rename = "seats")]
+    Seats { code: String, seats: Vec<Seat> },
     #[serde(rename = "match")]
-    Match { phase: String, time: Option<f64> },
+    Match {
+        phase: String,
+        time: Option<f64>,
+        #[serde(default)]
+        seats: Vec<Seat>,
+    },
     #[serde(rename = "state")]
     State(GameState),
+    #[serde(rename = "build")]
+    Build {
+        build: String,
+        #[serde(default)]
+        server_build: Option<String>,
+        #[serde(default)]
+        ok: bool,
+    },
+    #[serde(rename = "protocol")]
+    Protocol { version: Option<u8> },
+    #[serde(rename = "score")]
+    Score {
+        #[serde(default)]
+        red: u16,
+        #[serde(default)]
+        blue: u16,
+        #[serde(default)]
+        auto_red: u16,
+        #[serde(default)]
+        auto_blue: u16,
+    },
+    #[serde(rename = "error")]
+    Error { error: String },
     #[serde(rename = "pong")]
     Pong { t: f64 },
     #[serde(other)]
@@ -165,6 +242,9 @@ pub struct Engine {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+    binary: bool,
+    pending_fuel: Vec<Fuel>,
+    pending_fuel_seq: Option<u32>,
 }
 
 impl Engine {
@@ -196,6 +276,15 @@ impl Engine {
         if let Some(server) = &opts.server {
             cmd.arg("--server").arg(server);
         }
+        if opts.binary {
+            cmd.arg("--binary");
+        }
+        if let Some(build) = &opts.expect_build {
+            cmd.arg("--expect-build").arg(build);
+        }
+        if opts.no_build_check {
+            cmd.arg("--no-build-check");
+        }
         cmd.arg("--emit-hz").arg(opts.emit_hz.to_string());
         if let Some(dir) = &opts.asset_dir {
             cmd.env("RB_ASSET_DIR", dir);
@@ -207,7 +296,14 @@ impl Engine {
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
-        Ok(Self { child, stdin, stdout })
+        Ok(Self {
+            child,
+            stdin,
+            stdout,
+            binary: opts.binary,
+            pending_fuel: Vec::new(),
+            pending_fuel_seq: None,
+        })
     }
 
     pub fn send(&mut self, value: &serde_json::Value) -> std::io::Result<()> {
@@ -242,21 +338,76 @@ impl Engine {
         self.send(&serde_json::json!({"type":"quit"}))
     }
 
-    pub fn next_event(&mut self) -> std::io::Result<Option<EngineEvent>> {
-        loop {
-            let mut line = String::new();
-            let n = self.stdout.read_line(&mut line)?;
+    fn next_frame(&mut self) -> std::io::Result<Option<(u8, u32, Vec<u8>)>> {
+        use std::io::Read;
+        let mut hdr = [0u8; 16];
+        let mut read = 0;
+        while read < hdr.len() {
+            let n = self.stdout.read(&mut hdr[read..])?;
             if n == 0 {
                 return Ok(None);
             }
-            let line = line.trim();
-            if line.is_empty() {
-                continue;
-            }
-            match serde_json::from_str::<EngineEvent>(line) {
-                Ok(event) => return Ok(Some(event)),
-                Err(err) => {
-                    eprintln!("engine: ignoring malformed line ({err}): {line}");
+            read += n;
+        }
+        if &hdr[0..4] != b"RSB1" {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("bad engine frame magic: {:02x?}", &hdr[0..4]),
+            ));
+        }
+        let kind = hdr[5];
+        let len = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+        let seq = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]);
+        let mut payload = vec![0u8; len];
+        self.stdout.read_exact(&mut payload)?;
+        Ok(Some((kind, seq, payload)))
+    }
+
+    pub fn next_event(&mut self) -> std::io::Result<Option<EngineEvent>> {
+        loop {
+            if self.binary {
+                let Some((kind, seq, payload)) = self.next_frame()? else {
+                    return Ok(None);
+                };
+                match kind {
+                    2 => {
+                        self.pending_fuel = decode_fuel(&payload);
+                        self.pending_fuel_seq = Some(seq);
+                    }
+                    1 => {
+                        let line = String::from_utf8_lossy(&payload);
+                        match serde_json::from_str::<EngineEvent>(&line) {
+                            Ok(EngineEvent::State(mut state)) => {
+                                if state.fuel_bin {
+                                    if self.pending_fuel_seq == Some(state.seq as u32) {
+                                        state.fuel = self.pending_fuel.clone();
+                                    }
+                                }
+                                return Ok(Some(EngineEvent::State(state)));
+                            }
+                            Ok(event) => return Ok(Some(event)),
+                            Err(err) => {
+                                eprintln!("engine: ignoring malformed frame ({err}): {line}");
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            } else {
+                let mut line = String::new();
+                let n = self.stdout.read_line(&mut line)?;
+                if n == 0 {
+                    return Ok(None);
+                }
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                match serde_json::from_str::<EngineEvent>(line) {
+                    Ok(event) => return Ok(Some(event)),
+                    Err(err) => {
+                        eprintln!("engine: ignoring malformed line ({err}): {line}");
+                    }
                 }
             }
         }
@@ -271,6 +422,11 @@ impl Engine {
                 None => return Ok(None),
             }
         }
+    }
+
+    /// Wait for the engine process to exit and return its status code.
+    pub fn wait_code(&mut self) -> Option<i32> {
+        self.child.wait().ok().and_then(|s| s.code())
     }
 
     pub fn kill(&mut self) {
@@ -307,4 +463,34 @@ pub fn default_engine_path() -> PathBuf {
 
 pub fn find_me<'a>(state: &'a GameState, username: &str) -> Option<&'a Robot> {
     state.robots.iter().find(|r| r.name == username)
+}
+
+/// Decode the packed fuel frame: u16 count, u16 record size, u32 reserved,
+/// then `count` records of `present u8, x u16, y u16, z u16` in 1/4096 m
+/// fixed point (0x8000 = zero).
+fn decode_fuel(payload: &[u8]) -> Vec<Fuel> {
+    if payload.len() < 8 {
+        return Vec::new();
+    }
+    let count = u16::from_le_bytes([payload[0], payload[1]]) as usize;
+    let rec = u16::from_le_bytes([payload[2], payload[3]]) as usize;
+    if rec < 7 || payload.len() < 8 + count * rec {
+        return Vec::new();
+    }
+    let q = |o: usize| {
+        let raw = u16::from_le_bytes([payload[o], payload[o + 1]]);
+        (raw as f32 - 32768.0) / 4096.0
+    };
+    let mut out = Vec::with_capacity(count);
+    for i in 0..count {
+        let off = 8 + i * rec;
+        out.push(Fuel {
+            id: i as u16,
+            present: payload[off] == 1,
+            x: q(off + 1),
+            y: q(off + 3),
+            z: q(off + 5) + 0.045,
+        });
+    }
+    out
 }

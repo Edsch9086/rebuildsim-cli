@@ -45,6 +45,9 @@ Flags:
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)
 --fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/...)
+--binary            framed stdout: JSON + packed fuel records
+--expect-build H    fail fast (exit 3) unless cache/build.json matches H
+--no-build-check    skip the live BUILD fetch (offline debugging)
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
 ```
@@ -57,15 +60,22 @@ build).
 stdout is JSON lines only:
 
 ```json
-{"type":"ready","build":"4a8a0e8"}
-{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver"}
-{"type":"match","phase":"auto","time":null}
-{"type":"state","seq":0,"t":...,"phase":"auto","time":158.0,
+{"type":"ready","build":"4a8a0e8","binary":false}
+{"type":"build","build":"4a8a0e8","server_build":"4a8a0e8","ok":true}
+{"type":"protocol","version":1}
+{"type":"seats","code":"ABCDE","seats":[
+  {"seat":0,"name":"TestBot","team_flag":0,"alliance":"red"}]}
+{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
+{"type":"match","phase":"auto","substage":"auto","time":163.0,"seats":[...]}
+{"type":"score","seq":0,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
+{"type":"state","seq":0,"t":...,"phase":"auto","substage":"auto","time":158.0,
+ "time_remaining":158.0,"substage_remaining":15.0,
+ "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "fuel_count":456,
- "me":{"name":"TestBot","is_me":true,"alliance":"red","x":-4.67,"y":3.4,
+ "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
+       "pose_source":"predicted","x":-4.67,"y":3.4,
        "z":0,"heading":-1.18,"vx":0,"vy":0,"vz":0,"yawRate":0},
- "robots":[{"name":"TestBot","is_me":true,"alliance":"red","x":-4.67,"y":3.4,
-            "z":0,"heading":-1.18,"vx":0,"vy":0,"vz":0,"yawRate":0}],
+ "robots":[...],
  "fuel":[{"id":0,"x":-0.366,"y":-1.0466,"z":0.0748,"present":true}]}
 ```
 
@@ -94,15 +104,38 @@ Use `--keyboard` (CLI) or omit `--gamepad` (engine) for digital WASD/JL +
 LShift/K/Space controls.
 
 Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
-`{"type":"quit"}`, `{"type":"ping"}`.
+`{"type":"quit"}`, `{"type":"ping"}`, `{"type":"dump06","path":"/tmp/r.bin"}`.
+
+`--binary` frames stdout with a 16-byte `RSB1` header. Kind 2 carries packed
+fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
+`fuel_bin: true` and an empty `fuel` array. See `docs/PROTOCOL.md` §1.7.
+
+## Tests
+
+```bash
+node room06_test.cjs
+RB_ASSET_DIR=engine/cache node binary_test.cjs
+```
+
+`room06_test.cjs` parses a synthetic 4-seat packet and the captured live packet
+(seats 0–2 red, seat 3 blue). `binary_test.cjs` creates a 25% fuel room and
+checks the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
+
+`multibot_browser.mjs` is the optional 4-client identity/control test (engine
+host + three browser clients in separate contexts). It needs `playwright-core`
+and a Chromium binary; see the header comment.
 
 ## Known limitations
 
-- Driver input works during **auto**; only the 3-second countdown is
-  non-interactive. `phase` is `countdown`/`auto`/`teleop`/`end`.
+- Driver input works during **auto**; the first ~3 s are the spawn delay.
+  `phase` is `countdown`/`auto`/`teleop`/`end`; `substage` adds
+  `field_reset`/`transition`/`shift1`..`shift4`/`endgame`.
 - Robot pose prefers the render-region **predicted copy** (~48 Hz) and falls
   back to the ~15 Hz player copy; `pose_source` says which. `me`/`is_me`
-  identify this CLI's robot. Alliance is a spawn-x heuristic for now.
+  identify this CLI's robot. Alliance comes from the `0x06` seat team flag
+  (`alliance_source: "room"`); the spawn-x heuristic is only a fallback.
+- Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
+  emitted with the state and as `score` events on change.
 - `--spawn` is deferred; infer the spawn from `me`.
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
@@ -111,5 +144,8 @@ Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
   headless engine from the same IP was closed in testing. Use the local server
   or separate IPs for six-bot runs.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
-  fetches the latest build; the fuel-array locator and player-state signature are
-  heuristic and must be re-validated after a game update.
+  fetches the latest build and writes `build.json`; the engine compares it with
+  the live page `BUILD` and exits 3 on drift. `--expect-build` checks before
+  connecting. The `0x21` protocol version must be 1 (exit 4 otherwise). The
+  fuel-array locator and player-state signature still need re-validation after
+  a game update.

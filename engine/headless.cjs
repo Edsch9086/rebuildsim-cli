@@ -1,6 +1,8 @@
 // Headless REBUILD engine harness: real wasm, stub WebGL, DOM events, memory capture.
 const fs = require('node:fs');
 const path = require('node:path');
+const nativeFetch = globalThis.fetch;
+const { parseRoom06 } = require('./room06.cjs');
 
 const W = 1280, H = 720;
 const store = new Map();
@@ -246,6 +248,9 @@ const OPT = {
   gamepad: process.argv.includes('--gamepad'),
   server: getArg('server', ''),
   fuel: getArg('fuel', ''),
+  binary: process.argv.includes('--binary'),
+  expectBuild: getArg('expect-build', ''),
+  noBuildCheck: process.argv.includes('--no-build-check'),
 };
 globalThis.__RB_DEBUG = OPT.debug;
 if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join(ASSET_DIR, 'index.wasm'))) {
@@ -275,6 +280,11 @@ let roomCode = OPT.code;
 let host = false;
 let seated = false;
 let last41 = null;
+let lastRoom06 = null;
+let roomSeats = [];
+let scores = { red: 0, blue: 0 };
+let autoScores = { red: 0, blue: 0 };
+let protocolVersion = null;
 
 function addPrintableNames(buf) {
   let run = '';
@@ -298,20 +308,100 @@ function addPrintableNames(buf) {
   flush();
 }
 
+let seatsKey = '';
+function applyRoom06(buf) {
+  const parsed = parseRoom06(buf);
+  roomSeats = parsed.seats;
+  if (roomSeats.length) {
+    // The player records are the real occupants; drop printable-run noise.
+    roomNames = new Set(roomSeats.map(s => s.name));
+    if (OPT.username) roomNames.add(OPT.username);
+  }
+  // The team byte (0 red, 1 blue) is authoritative when present; the seat
+  // order fallback (first 3 red, next 3 blue) covers older builds.
+  for (const seat of roomSeats) {
+    allianceByName.set(seat.name, seat.alliance);
+    allianceSourceByName.set(seat.name, 'room');
+  }
+  const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.alliance}`).join('|');
+  if (key !== seatsKey) {
+    seatsKey = key;
+    emit({ type: 'seats', code: roomCode, seats: roomSeats });
+  }
+  return roomSeats;
+}
+
+function parse41(buf) {
+  last41 = buf;
+  if (buf.length >= 18) {
+    // Decoded from a scoreboard capture: u16 red/blue totals at +14/+16.
+    scores = { red: buf.readUInt16LE(14), blue: buf.readUInt16LE(16) };
+  }
+  if (buf.length >= 30) {
+    // Auto-only breakdown at +18/+28; freezes when auto ends.
+    autoScores = { red: buf.readUInt16LE(18), blue: buf.readUInt16LE(28) };
+  }
+  if (buf.length >= 14) {
+    const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    lastMatchTime = dv.getFloat32(10, true);
+  }
+}
+
+function phaseFor(t) {
+  if (t == null) return 'countdown';
+  if (t > 143.0) return 'auto';
+  if (t > 0.0) return 'teleop';
+  return 'end';
+}
+
+// Match structure verified against the HUD in a full match:
+//   auto        163.0 -> 143.0 (20 s)
+//   field reset 143.0 -> 140.0 (3 s)
+//   transition  140.0 -> 130.0 (10 s)
+//   shift 1..4  130.0 -> 30.0 (four 25 s shifts)
+//   endgame      30.0 -> 0.0 (30 s)
+function substageFor(t) {
+  if (t == null) return 'prematch';
+  if (t > 143.0) return 'auto';
+  if (t > 140.0) return 'field_reset';
+  if (t > 130.0) return 'transition';
+  if (t > 105.0) return 'shift1';
+  if (t > 80.0) return 'shift2';
+  if (t > 55.0) return 'shift3';
+  if (t > 30.0) return 'shift4';
+  if (t > 0.0) return 'endgame';
+  return 'end';
+}
+
+function substageRemaining(t, stage) {
+  if (t == null) return null;
+  const end = { auto: 143, field_reset: 140, transition: 130, shift1: 105,
+    shift2: 80, shift3: 55, shift4: 30, endgame: 0 }[stage];
+  return end == null ? null : Math.max(0, t - end);
+}
+
 function handleServerFrame(buf) {
   if (!buf || !buf.length) return;
   const type = buf[0];
   if (type === 0x06) {
-    // room state: room code at 1..5, then seats/names
+    // room state: room code at 1..5, then seat records in seat order.
     roomCode = buf.subarray(1, 6).toString('latin1');
+    lastRoom06 = Buffer.from(buf);
     addPrintableNames(buf);
-    log('room state', roomCode, 'names', [...roomNames].slice(0, 12));
+    applyRoom06(buf);
+    if (globalThis.__RB_DEBUG) log('ROOM06', buf.toString('hex'));
+    log('room state', roomCode, 'names', [...roomNames].slice(0, 12), 'len', buf.length);
   } else if (type === 0x41) {
-    last41 = buf;
-    if (buf.length >= 14) {
-      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-      lastMatchTime = dv.getFloat32(10, true);
+    parse41(buf);
+  } else if (type === 0x21) {
+    // S->C protocol hello: 21 00 01 00 00 (version at byte 2)
+    if (buf.length >= 3 && buf[2] !== 1) {
+      log('protocol version mismatch: server', buf[2], 'engine expects 1');
+      emit({ type: 'error', error: 'protocol_mismatch', server: buf[2], expected: 1 });
+      process.exit(4);
     }
+    protocolVersion = buf.length >= 3 ? buf[2] : null;
+    emit({ type: 'protocol', version: protocolVersion });
   } else if (type === 0x42) {
     parseFuelPacket(buf);
   }
@@ -587,6 +677,7 @@ function findPose(name) {
 
 const lastPose = new Map();
 const allianceByName = new Map();
+const allianceSourceByName = new Map();
 function readRobots() {
   const out = [];
   for (const name of roomNames) {
@@ -598,7 +689,8 @@ function readRobots() {
       // keep the last known pose for a frame instead of dropping a robot
       const alliance = allianceByName.get(name) || (prev.x < 0 ? 'red' : 'blue');
       out.push({
-        name, is_me: name === OPT.username, alliance, stale: true,
+        name, is_me: name === OPT.username, alliance,
+        alliance_source: allianceSourceByName.get(name) || 'spawn', stale: true,
         x: +prev.x.toFixed(4), y: +prev.y.toFixed(4), z: +prev.z.toFixed(4),
         heading: +prev.heading.toFixed(4), vx: 0, vy: 0, vz: 0, yawRate: 0,
       });
@@ -618,12 +710,15 @@ function readRobots() {
     lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading });
     let alliance = allianceByName.get(name);
     if (!alliance) {
-      // heuristic captured at first sight (spawn side); red x<0, blue x>0
+      // Fallback only: spawn side. Prefer the 0x06 seat order when available.
       alliance = p.x < 0 ? 'red' : 'blue';
       allianceByName.set(name, alliance);
+      allianceSourceByName.set(name, 'spawn');
     }
     out.push({
-      name, is_me: name === OPT.username, alliance, pose_source: p.source || 'unknown',
+      name, is_me: name === OPT.username, alliance,
+      alliance_source: allianceSourceByName.get(name) || 'spawn',
+      pose_source: p.source || 'unknown',
       x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4),
       heading: +p.heading.toFixed(4), vx: +vx.toFixed(3), vy: +vy.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
@@ -636,11 +731,74 @@ function readRobots() {
 // UI flow
 // ---------------------------------------------------------------------------
 
-function emit(obj) { process.stdout.write(JSON.stringify(obj) + '\n'); }
+const BIN_MAGIC = Buffer.from('RSB1');
+function writeFrame(kind, frameSeq, payload) {
+  const h = Buffer.alloc(16);
+  BIN_MAGIC.copy(h, 0);
+  h[4] = 1;                 // framing version
+  h[5] = kind;              // 1 = JSON, 2 = packed fuel
+  h.writeUInt16LE(0, 6);
+  h.writeUInt32LE(payload.length, 8);
+  h.writeUInt32LE(frameSeq >>> 0, 12);
+  process.stdout.write(Buffer.concat([h, payload]));
+}
+function emit(obj) {
+  if (!OPT.binary) { process.stdout.write(JSON.stringify(obj) + '\n'); return; }
+  writeFrame(1, Number(obj.seq) || 0, Buffer.from(JSON.stringify(obj)));
+}
+function emitFuelBinary(fuel, frameSeq) {
+  const count = fuel.length;
+  const payload = Buffer.alloc(8 + count * 7);
+  payload.writeUInt16LE(count, 0);
+  payload.writeUInt16LE(7, 2);
+  payload.writeUInt32LE(0, 4);
+  for (let i = 0; i < count; i++) {
+    const f = fuel[i];
+    const off = 8 + i * 7;
+    const q = (v) => Math.max(0, Math.min(0xffff, Math.round(v * 4096) + 0x8000));
+    payload[off] = f.present ? 1 : 0;
+    payload.writeUInt16LE(q(f.x), off + 1);
+    payload.writeUInt16LE(q(f.y), off + 3);
+    payload.writeUInt16LE(q(f.z - 0.045), off + 5);
+  }
+  writeFrame(2, frameSeq, payload);
+}
 
 let buildHash = null;
 try { buildHash = JSON.parse(fs.readFileSync(BUILD_FILE, 'utf8')).build; } catch {}
-emit({ type: 'ready', build: buildHash });
+if (!buildHash) {
+  log('warning: no build hash in', BUILD_FILE, '(run node prepare.mjs to pin the build)');
+}
+if (OPT.expectBuild) {
+  if (!buildHash) {
+    log('build pin failed: assets have no build.json; expected', OPT.expectBuild);
+    process.exit(3);
+  }
+  if (buildHash !== OPT.expectBuild) {
+    log('build pin failed: assets are', buildHash, 'but --expect-build is', OPT.expectBuild);
+    process.exit(3);
+  }
+}
+if (!OPT.noBuildCheck) {
+  const origin = OPT.server ? `http://${OPT.server}/` : 'https://rebuildsim.com/';
+  nativeFetch(origin, { redirect: 'follow' })
+    .then((r) => r.text())
+    .then((html) => {
+      const m = html.match(/BUILD\s*=\s*["']([0-9a-f]+)["']/);
+      if (!m) { log('build check: could not find BUILD on', origin, '(continuing)'); return; }
+      const live = m[1];
+      if (buildHash && live !== buildHash) {
+        log('build drift: assets are', buildHash, 'but server is', live, '- run node prepare.mjs');
+        emit({ type: 'error', error: 'build_drift', cached: buildHash, server: live });
+        setTimeout(() => process.exit(3), 100);
+        return;
+      }
+      emit({ type: 'build', build: buildHash || live, server_build: live, ok: true });
+      log('build check ok', live);
+    })
+    .catch((e) => log('build check skipped:', String(e)));
+}
+emit({ type: 'ready', build: buildHash, binary: OPT.binary });
 
 
 function key(type, keyName, code, keyCode) {
@@ -762,7 +920,7 @@ function onTrack(name, params) {
     seated = p.role === 'driver';
     roomCode = roomCode || OPT.code;
     log('joined room', roomCode, 'host', host, 'role', p.role);
-    emit({ type: 'room', code: roomCode, host, seated, role: p.role });
+    emit({ type: 'room', code: roomCode, host, seated, role: p.role, seats: roomSeats });
     const readyAndStart = () => {
       if (host && OPT.start) {
         setTimeout(() => globalThis.__ctl.click(646, 688), 900);
@@ -798,9 +956,16 @@ function onTrack(name, params) {
     flow.match = true;
     matchStarted = true;
     poseCache.clear();
-    allianceByName.clear();
+    // Seat order does not change during a match; re-apply it if the room
+    // packet arrived before the match. Do not clear it (that would drop the
+    // only authoritative alliance source back to the spawn heuristic).
+    if (lastRoom06) applyRoom06(lastRoom06);
     fuelAddr = 0;
-    emit({ type: 'match', phase: 'countdown', time: lastMatchTime });
+    lastMatchTime = null;
+    last41 = null;
+    scores = { red: 0, blue: 0 };
+    autoScores = { red: 0, blue: 0 };
+    emit({ type: 'match', phase: phaseFor(lastMatchTime), substage: substageFor(lastMatchTime), time: lastMatchTime, seats: roomSeats });
   }
 }
 
@@ -841,6 +1006,7 @@ setInterval(() => {
 
 // state emitter
 let seq = 0;
+let lastScoreKey = '';
 setInterval(() => {
   if (!mem || !matchStarted) return;
   if (!fuelAddr) {
@@ -849,19 +1015,33 @@ setInterval(() => {
   }
   const robots = readRobots();
   const fuel = readFuel();
-  let phase = 'match';
-  if (lastMatchTime != null) {
-    if (lastMatchTime > 160.0) phase = 'countdown';
-    else if (lastMatchTime > 140.0) phase = 'auto';
-    else if (lastMatchTime > 0.0) phase = 'teleop';
-    else phase = 'end';
-  }
+  const phase = phaseFor(lastMatchTime);
+  const substage = substageFor(lastMatchTime);
   const me = robots.find(r => r.is_me) || null;
-  emit({
-    type: 'state', seq: seq++, t: Date.now() / 1000,
-    phase, time: lastMatchTime,
+  const s = seq++;
+  const key = `${scores.red}:${scores.blue}`;
+  if (key !== lastScoreKey) {
+    lastScoreKey = key;
+    emit({ type: 'score', seq: s, red: scores.red, blue: scores.blue,
+      auto_red: autoScores.red, auto_blue: autoScores.blue });
+  }
+  if (OPT.binary) {
+    emitFuelBinary(fuel, s);
+  }
+  const state = {
+    type: 'state', seq: s, t: Date.now() / 1000,
+    phase, substage,
+    time: lastMatchTime,
+    time_remaining: lastMatchTime,
+    substage_remaining: substageRemaining(lastMatchTime, substage),
+    red_score: scores.red, blue_score: scores.blue,
+    auto_red_score: autoScores.red, auto_blue_score: autoScores.blue,
+    scores: { red: scores.red, blue: scores.blue },
+    protocol: protocolVersion,
     me, robots, fuel, fuel_count: fuelPacketCount,
-  });
+  };
+  if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
+  emit(state);
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
 let trace = null;
@@ -928,6 +1108,8 @@ rl.on('line', (line) => {
     log('PAD', JSON.stringify({ axes: pad.axes, buttons: pad.buttons.map(b => b.pressed ? 1 : 0) }));
   }
   else if (cmd.type === 'trace') startTrace(cmd);
+  else if (cmd.type === 'dump06') { if (lastRoom06) fs.writeFileSync(cmd.path || '/tmp/opencode/room06.bin', lastRoom06); }
+  else if (cmd.type === 'dumpws') { fs.writeFileSync(cmd.path || '/tmp/opencode/wsdump.json', JSON.stringify(wslog)); }
   else if (cmd.type === 'ready') globalThis.__ctl.click(646, 688);
   else if (cmd.type === 'start') globalThis.__ctl.click(1150, 688);
   else if (cmd.type === 'leave') globalThis.__ctl.click(144, 688);
