@@ -63,6 +63,37 @@ pub struct Robot {
     pub vz: f32,
     #[serde(default, rename = "yawRate")]
     pub yaw_rate: f32,
+    #[serde(default)]
+    pub pose_source: String,
+}
+
+impl Robot {
+    pub fn is_blue(&self) -> bool {
+        self.alliance.eq_ignore_ascii_case("blue")
+    }
+
+    /// Convert a global field vector into the driver/control frame used by `Input`.
+    /// Red drives with the field axes; blue is rotated 180 degrees. Validate this
+    /// against a blue client when possible (see docs/SURVEY.md §4.2).
+    pub fn field_to_driver(&self, x: f32, y: f32) -> (f32, f32) {
+        if self.is_blue() { (-x, -y) } else { (x, y) }
+    }
+
+    pub fn driver_to_field(&self, x: f32, y: f32) -> (f32, f32) {
+        self.field_to_driver(x, y)
+    }
+
+    /// Alliance-relative heading if the game exposes a global heading.
+    pub fn alliance_heading(&self) -> f32 {
+        if self.is_blue() {
+            let mut h = self.heading + std::f32::consts::PI;
+            while h > std::f32::consts::PI { h -= 2.0 * std::f32::consts::PI; }
+            while h < -std::f32::consts::PI { h += 2.0 * std::f32::consts::PI; }
+            h
+        } else {
+            self.heading
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

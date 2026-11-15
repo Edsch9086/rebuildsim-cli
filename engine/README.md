@@ -44,7 +44,7 @@ Flags:
 --spawn <S>         reserved; ignored (infer spawn from first pose)
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)
---fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/max)
+--fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/...)
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
 ```

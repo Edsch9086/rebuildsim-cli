@@ -215,12 +215,18 @@ After driving:
 x = -0.4478, y = 3.4013, heading = -3.1172
 ```
 
-There are many copies (room UI, telemetry, replay, network). The copy in the
-`0x1f....` region with the preceding `0x01` is the live player state. It updates
-during auto and teleop; the earlier "lag" was input sent during the 3-second
-countdown. The engine exposes it as `me`/`is_me` by username. Alliance is a
-first-sight spawn-x heuristic (`x<0` red, `x>0` blue) until the `0x06` seat
-layout is decoded; poses are global field coordinates. See `SURVEY.md` §4.2.
+There are many copies (room UI, telemetry, replay, network). Two copies matter:
+
+- **Acked/player copy** at `0x1f5c45` (pose `0x1f5c60`), preceded by `0x01`,
+  updates at **~15 Hz**.
+- **Predicted/render copy** at `0x512a49` (pose `0x512a64`), same layout and
+  `1.0` signature, updates at **~48 Hz**. The engine prefers this copy
+  (`pose_source: "predicted"`) and falls back to the acked copy.
+
+The earlier "lag" was input sent during the 3-second countdown. The engine
+exposes `me`/`is_me` by username. Alliance is a first-sight spawn-x heuristic
+(`x<0` red, `x>0` blue) until the `0x06` seat layout is decoded; poses are global
+field coordinates. See `SURVEY.md` §4.2.
 
 ### 2.3 Match/room state in memory
 

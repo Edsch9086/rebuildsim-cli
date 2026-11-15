@@ -77,9 +77,17 @@ always read `me` rather than indexing `robots[0]` or guessing by team.
 
 `alliance` is currently a first-sight spawn-x heuristic (`x<0` red, `x>0` blue).
 Global poses are field coordinates. The driver input axes are in the driver
-control frame; the game handles the red/blue side. A bot that plans in global
-coordinates must use `alliance` when converting. The room state (`0x06`)
-contains the real seat/alliance assignment; decoding it is a TODO.
+control frame; the game handles the red/blue side. Use the helpers:
+
+```rust
+let (dx, dy) = me.field_to_driver(global_x - me.x, global_y - me.y);
+engine.send_input(&Input { x: dx, y: dy, ..Default::default() })?;
+```
+
+`field_to_driver` rotates 180° for blue; `alliance_heading` does the same for a
+heading. This is based on the red observation and the expected blue inversion;
+validate it against a blue client. The room state (`0x06`) contains the real
+seat/alliance assignment; decoding it is a TODO.
 
 ## Engine JSON lines (stdio)
 

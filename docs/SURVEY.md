@@ -130,8 +130,8 @@ u16 z              // bottom; add ~0.045 m for the centre
 The engine locates the array by taking a recent packet record, searching memory
 for its `x,y` pair, deriving `base = hit - 1 - id*7`, and verifying several
 packet records against that base. This survives both a changing fuel count and
-heap reallocation. Validated: a 25% fuel rule produced **150 fuel** and the
-locator found a new base with `fuel_count=150`; the default build produced 456. If fewer than four records are available it falls back to a
+heap reallocation. Validated: a 25% rule produced **150 fuel**, a 50% rule 255, and the default
+build 456; the locator found a new base each time (`fuel_count` matched). If fewer than four records are available it falls back to a
 run scan for `count <= 2048`. The engine emits `fuel_count` and all `count`
 records (with `present`), and merges the packet's velocities/flags when available.
 For 4,000+ fuel the JSON state is large; a compact/binary fuel channel is a

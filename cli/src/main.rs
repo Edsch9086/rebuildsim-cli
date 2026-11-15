@@ -73,7 +73,7 @@ OPTIONS:
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
   --keyboard          use digital keyboard controls instead of the virtual gamepad
-  --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, max)
+  --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, ...)
   --server <HOST:PORT> connect to a local server build
   -h, --help          show this help
 
@@ -120,8 +120,8 @@ fn print_state(state: &GameState, username: &str) {
     let me = state.me.as_ref().or_else(|| find_me(state, username));
     let me_s = match me {
         Some(r) => format!(
-            "me={}({}:{:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2})",
-            r.name, r.alliance, r.x, r.y, r.heading, r.vx, r.vy
+            "me={}({}:{} {:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2})",
+            r.name, r.alliance, r.pose_source, r.x, r.y, r.heading, r.vx, r.vy
         ),
         None => "me=?".to_string(),
     };

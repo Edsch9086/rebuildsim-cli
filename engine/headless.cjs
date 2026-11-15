@@ -775,7 +775,7 @@ function onTrack(name, params) {
       // Room settings > Rules > Fuel count. 720p coordinates.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
-      if (raw === 'max' || raw === 'full') { clicks = 20; dir = 1; }
+      if (raw === 'max' || raw === 'full') { log('--fuel max is not supported; use an explicit percentage'); clicks = 0; }
       else {
         const pct = Number(raw);
         if (!Number.isFinite(pct) || pct <= 0) clicks = 0;
