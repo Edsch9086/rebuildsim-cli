@@ -60,11 +60,11 @@ The `0x07` seats the joining player; the last `00 80` is part of the selection
 ```
 u8  0x40
 u16 tick
-u16 buttons
-i16 axis1        // 0x8000 neutral; 0xffff = +1; 0x0000 = -1
-i16 axis2
-i16 axis3
-u8  0x34
+u16 reserved (observed 0)
+i16 axis1        // left stick X / strafe; 0x8000 neutral
+i16 axis2        // left stick Y / forward; 0x8000 neutral
+i16 axis3        // right stick X / turn; 0x8000 neutral
+u8  actions      // action bitfield
 ```
 
 Neutral:
@@ -79,16 +79,31 @@ W held (`axis1` = +1):
 40 8d 0c 00 00 ff ff 00 80 00 80 34
 ```
 
-The game sends full analog axes even for keyboard input. Intake/shoot/etc. are
-in `buttons`. The client also sends `0x44 <u32> ...` pings (7 bytes) and receives
-`0x45 <u32> ...` echoes (5 bytes).
+The **last byte** is the action bitfield. Observed in teleop:
+
+| Action | Bit | Value while held |
+| --- | --- | --- |
+| intake (LT) | 0 | `0x35` (from neutral `0x34`) |
+| shoot (RT) | 1 | `0x36` |
+| outtake (LB/RB) | 3 | `0x3c` |
+
+`0x34` is the in-match neutral value; `0x30` appears during the countdown.
+A/B/X/Y do not change the packet. The client also sends `0x44` pings and receives
+`0x45` echoes.
+
+The engine's virtual standard gamepad maps `x`→axes[0], `y`→-axes[1],
+`rotate`→axes[2], intake→buttons[6], shoot→buttons[7], outtake→buttons[4]
+(axes[4]/[5] are also set for trigger-axis backends).
+
+Shooting is a trigger; the game auto-aims turreted robots and auto-turns dumper
+robots. There is no separate aim axis.
 
 ### 1.5 Fuel state (S→C, 1161 bytes)
 
 ```
 u8   0x42
 u32  tick
-u16  456        // total fuel
+u16  total fuel // 1..~4300 depending on gamerules
 u16  48         // records in this packet
 48 × 24 bytes:
   u16 id        // 0..455, 1:1 with memory array index
@@ -99,9 +114,10 @@ u16  48         // records in this packet
   u16 vx, vy, vz// 0x8000 = zero
 ```
 
-The server cycles through all 456 fuel in 48-record chunks (`id` starts at
-0, 48, 96, ... and wraps). It sends chunks continuously; the full set refreshes
-in ~0.3 s at 30 Hz. Example first record:
+The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
+96, ... and wraps). It sends chunks continuously; the full set refreshes in
+~0.3 s at 30 Hz. The total count is **not fixed**: staged fuel can range from
+~135 to ~4,300. Example first record:
 
 ```
 42 04 00 00 00 c8 01 30 00 00 00
@@ -116,8 +132,9 @@ in ~0.3 s at 30 Hz. Example first record:
 
 - `u8 0x41`, `u32 tick`, then a float match clock at offset 10
   (e.g. `c8 09 0f 43` = 143.0 s remaining).
-- The clock starts at ~163 s. Auto ends at ~143 s; teleop runs to 0.
-  Driver input is ignored before teleop. The engine uses this to set `phase`.
+- The clock starts at ~163 s: 3-second countdown (>160), 20-second auto
+  (160→140), teleop (140→0). **Driver input works during auto**; only the
+  countdown is non-interactive. The engine uses this to set `phase`.
 - The rest is settings, scores, seat/robot state. The packet grows when
   spectators/players join (154 → 224/228 → 340 bytes).
 - This is **not** robot pose state.
@@ -140,8 +157,10 @@ signature scanning, not fixed addresses.
 
 ### 2.1 Fuel array
 
-- 456 records × 7 bytes, ID-ordered.
-- Found at `0x56ff37` in one run, `0x570f23` in another.
+- `total` records × 7 bytes, ID-ordered. `total` comes from the `0x42` packet
+  header (1..~4300).
+- Found at `0x56ff37`, `0x570f23`, `0x570487`, etc. The base moves with heap
+  layout, and may move when the fuel count changes.
 - Record:
 
 ```
@@ -151,10 +170,13 @@ u16 y
 u16 z             // bottom; add ~0.045 m for centre
 ```
 
-- The array is immediately after the room/match state in the heap. A scan for
-  456 consecutive records with `present ∈ {0,1}` and `z` in `[32700, 33200]`
-  works. Stop after the first 8 MB for speed.
-- The packet id equals the array index (id 0 → record 0).
+- Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
+  for that 4-byte pair, set `base = hit - 1 - id*7`, and verify several packet
+  records against the base. This works for any count and heap layout.
+- Fallback for `count <= 2048`: scan for `count` consecutive records with
+  `present ∈ {0,1}` and `z` in `[32700, 33200]`. Stop after the first 8 MB.
+- The packet id equals the array index (id 0 → record 0). The engine emits
+  `fuel_count` and all `count` records, merging packet velocities/flags.
 
 ### 2.2 Player state struct
 
@@ -194,8 +216,11 @@ x = -0.4478, y = 3.4013, heading = -3.1172
 ```
 
 There are many copies (room UI, telemetry, replay, network). The copy in the
-`0x1f....` region with the preceding `0x01` is the player state. The
-server-acked copy can lag the local predicted pose; see `SURVEY.md` §4.2.
+`0x1f....` region with the preceding `0x01` is the live player state. It updates
+during auto and teleop; the earlier "lag" was input sent during the 3-second
+countdown. The engine exposes it as `me`/`is_me` by username. Alliance is a
+first-sight spawn-x heuristic (`x<0` red, `x>0` blue) until the `0x06` seat
+layout is decoded; poses are global field coordinates. See `SURVEY.md` §4.2.
 
 ### 2.3 Match/room state in memory
 

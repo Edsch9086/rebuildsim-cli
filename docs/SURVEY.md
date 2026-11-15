@@ -94,74 +94,109 @@ harness. This is a technical bypass of the browser guard; see ethics section.
 
 ## 4. State extraction
 
-### 4.1 Fuel — solved
+### 4.1 Fuel — solved, dynamic length
 
-The wasm memory contains a fixed array of **456 fuel records × 7 bytes**:
+The server's `0x42` packet and the wasm memory both use **1-based IDs** for fuel.
+The total count is `u16` at packet offset 5; it is **not fixed**. The public
+update notes say the staged-fuel rule ranges from ~25% (~135 fuel) to as much as
+the field can hold (~4,300 fuel). The engine must therefore never assume 456.
+
+Server packet (`0x42`, 1161 bytes at 48 records/chunk):
 
 ```
-u8  present        // 0/1
-u16 x              // (v - 0x8000) / 4096
+u8   0x42
+u32  tick
+u16  total fuel count
+u16  records in this chunk (48)
+48 × 24 bytes:
+  u16 id
+  u16 count        // 1, or >1 for a cluster
+  u32 0x00010000
+  u32 flags        // 0 normal; 7 seen for a hub cluster
+  u16 x, y, z      // fixed point: (v - 0x8000) / 4096 m
+  u16 vx, vy, vz   // 0x8000 = zero
+```
+
+The server cycles through all IDs in 48-record chunks. The wasm memory contains
+a parallel `total × 7-byte` array:
+
+```
+u8  present
+u16 x
 u16 y
-u16 z              // bottom; add ~0.045 m for centre
+u16 z              // bottom; add ~0.045 m for the centre
 ```
 
-The array is **ID-indexed** and matches the `0x42` packet ids exactly. In one
-run it was at `0x56ff37`; in another at `0x570f23`. The address depends on heap
-layout, so the engine finds it by scanning for a run of 456 records with
-`present ∈ {0,1}` and `z` in the expected range. This is fast enough to do once
-per match.
+The engine locates the array by taking a recent packet record, searching memory
+for its `x,y` pair, deriving `base = hit - 1 - id*7`, and verifying several
+packet records against that base. This survives both a changing fuel count and
+heap reallocation. If fewer than four records are available it falls back to a
+run scan for `count <= 2048`. The engine emits `fuel_count` and all `count`
+records (with `present`), and merges the packet's velocities/flags when available.
+For 4,000+ fuel the JSON state is large; a compact/binary fuel channel is a
+Phase 2 optimization.
 
-The `0x42` packet also gives velocities and cluster counts; the engine can merge
-those by id. For most bot logic, finite-differencing positions at 30–60 Hz is
-simpler and sufficient for fuel.
+### 4.2 Robot poses — live local simulation
 
-### 4.2 Robot poses — found, one caveat
-
-The live player state is a struct in wasm memory. We found it by searching for
-the player's display name and reading nearby floats:
+The server does **not** send robot poses. Each client runs the deterministic
+simulation. We read the local player state out of wasm memory:
 
 ```
 name field (32 bytes, zero-padded)
 +0x1b  f32 x
 +0x1f  f32 y
-+0x23  f32 z (chassis, ~0.001)
-+0x27  f32 \
-+0x2b  f32  > small values (likely velocities/derived state)
-+0x2f  f32 /
-...
++0x23  f32 z (chassis)
++0x27  f32 small derived value
++0x2b  f32 small derived value
++0x2f  f32 small derived value
 +0x3f  f32 heading (radians)
-...
-+0x57  f32 1.0 (valid/active)
++0x57  f32 1.0 (live-copy signature)
 ```
 
-Example: `MemBot` at `0x1f5c45`, pose base at `0x1f5c60`:
-`x=-4.6725, y=3.4012, heading=-1.1787`. After driving, the same struct showed
-`x=-0.4478, y=3.4013, heading=-3.1172`.
+The live copy is preceded by a `0x01` byte. Example: `Action2` at `0x1f5c45`,
+pose base `0x1f5c60`: `x=-4.6725, y=3.4012, heading=-1.1787`. During the auto
+demo the same struct moved smoothly to `x=-0.11, y=3.40` with finite-difference
+velocities ~4.5 m/s. This is the **live simulation pose**, not a server keyframe.
+Earlier confusion about a lagging "server-acked" copy came from sending driver
+input during the 3-second pre-match countdown; once the countdown ends the pose
+is live in both auto and teleop.
 
-There are multiple copies of the same player (room UI, telemetry, replay,
-network buffers). The copy at `name+0x1b` in the `0x1f....` region is the one that
-matched the simulated robot. The **server-acked** copy appears to update on
-network keyframes, so it can lag the local predicted pose by a few seconds in a
-headless client. The game's render path clearly has a lower-latency copy; finding
-that copy is the main remaining RE task for a fast closed-loop bot.
+The engine emits a top-level `me` object and an `is_me` flag on every robot,
+matched by the CLI username. This avoids the six-robot "which one is mine"
+failure mode. A `stale` fallback keeps `me` present if a memory read misses one
+frame.
 
-For a **spectator** connection the player state is the authoritative view and is
-fine for observation/opponent tracking. For a **player** bot we recommend either:
+Alliance is currently a **heuristic**: the first pose seen for a robot is at its
+spawn, so `x < 0` is red and `x > 0` is blue. The room state (`0x06`) clearly
+contains seat/alliance data but its seat layout is not fully decoded yet. The
+heuristic is only for convenience; `is_me` is exact. Coordinates are global
+field coordinates. The driver input axes are in the driver's control frame (the
+game handles the red/blue side); a bot planning in global coordinates must use
+`alliance` when converting. This is called out in `docs/API.md`.
 
-1. find the predicted render transform (likely a 4×4 model/view matrix or a
-   physics-body pose), or
-2. run the bot as a spectator and send inputs through a separate player
-   connection (more complex, two sockets), or
-3. use the acked pose for slow, high-level decisions and local open-loop
-   primitives for execution.
+Robot linear/angular velocities are finite differences of the live pose. At
+10–30 Hz they are smooth and match the motion; a direct velocity field may exist
+in the player struct at +0x27/+0x2b/+0x2f but we have not needed it.
 
 ### 4.3 Match/room state
 
-`0x41` carries the match clock and settings. The engine reads the float at
-offset 10 (e.g. `143.0`) and derives `phase` (`>143` auto, `>0` teleop, else end).
-`0x06` carries room code, host, seat assignments, names, teams, robot ids, and
-spawn selections. `rbTrack` analytics events (`page_view`, `match_start`,
-`room_join`) are a convenient blind-UI feedback channel while automating the menu.
+`0x41` carries the match clock at float offset 10. The clock starts near
+`163.0 s`; there is a **3-second countdown** (robots spawn in), then a 20-second
+auto, then teleop down to 0:
+
+```
+time > 160   -> countdown
+160 >= time > 140 -> auto
+140 >= time > 0   -> teleop
+else end
+```
+
+**Driver input is allowed during auto** (by design, so path planning is not the
+whole game). The engine does not gate inputs on teleop; the CLI demo starts in
+auto. Only the 3-second countdown is non-interactive. `0x06` carries room code,
+host, seats, names, teams, robot ids, and spawn selections. `rbTrack` events
+(`page_view`, `match_start`, `room_join`) are a convenient blind-UI feedback
+channel while automating the menu.
 
 ## 5. Control
 
@@ -172,61 +207,80 @@ spawn selections. `rbTrack` analytics events (`page_view`, `match_start`,
 ```
 u8  0x40
 u16 tick
-u16 buttons
-i16 axis1          // 0x8000 neutral, 0xffff = +1, 0x0000 = -1
-i16 axis2
-i16 axis3
-u8  0x34
+u16 reserved (observed 0)
+i16 axis1          // left stick X / strafe
+i16 axis2          // left stick Y / forward (0x8000 neutral)
+i16 axis3          // right stick X / turn
+u8  actions        // action bitfield
 ```
 
-Pressing **W** changed `axis1` to `0xffff`. `0x8000` is neutral on all axes, so
-the game sends full analog axes even for keyboard input. Intake/shoot are in the
-`buttons` bitfield. A native client can send this packet directly, but the local
-simulation reads the game's own input state, so the clean path is to drive the
-game through synthetic keyboard/gamepad input.
+The **last byte** is the action bitfield, not a checksum and not bytes 3–4.
+Observed values:
 
-Driver input is **ignored during the auto period**. The `0x41` match clock starts
-around `163.0 s`, auto ends at `143.0 s`, and teleop runs from there down to 0.
-The engine reports `phase: "auto" | "teleop" | "end"` from this clock, and bot
-code must wait for `teleop` before expecting drive/shoot inputs to move the
-robot. The engine's own teleop gating is a one-line threshold in
-`engine/headless.cjs`; if the game changes the auto length, update it.
+| Action | Bit | Neutral→active | Source |
+| --- | --- | --- | --- |
+| intake | 0 | `0x34 → 0x35` | LT / L trigger |
+| shoot | 1 | `0x34 → 0x36` | RT / R trigger |
+| outtake | 3 | `0x34 → 0x3c` | LB or RB / bumper |
 
-For analog control, implement a **virtual gamepad** (`navigator.getGamepads`)
-and feed axes; the game will encode them into `0x40` and use them locally. This
-avoids overriding packets and keeps prediction in sync.
+`0x34` is the in-match neutral value; the low nibble contains the action bits and
+bit 2/base bits are game flags (the value is `0x30` during the initial countdown).
+Pressing A/B/X/Y does not change the packet. The virtual gamepad maps:
+
+```
+axes[0] = x (left stick X)
+axes[1] = -y (left stick Y; -1 is forward)
+axes[2] = rotate (right stick X)
+axes[3] = 0
+buttons[6] = intake (LT)
+buttons[7] = shoot (RT)
+buttons[4] = outtake (LB)
+axes[4]/[5] are also set for LT/RT for backends that read trigger axes
+```
+
+The engine calls `refreshPad()` after changing buttons so raylib's cached gamepad
+state sees them; axes are sampled live. Verified in teleop: holding shoot gives
+a stream of `... 36` packets, intake `... 35`, outtake `... 3c`, and releasing
+returns to `... 34`.
+
+Shooting is a **trigger, not an aim vector**. Turreted robots aim themselves from
+almost anywhere in their alliance zone; dumper-style robots turn toward the hub
+automatically when shoot is held. The bot only needs `shoot: true` (and the game
+handles the aim/turn). Do not try to synthesize a turret angle unless the game
+exposes one.
+
+For a native client, the packet above can be sent directly, but then the local
+wasm simulation is out of sync. The supported path is the virtual gamepad.
 
 ### 5.2 UI automation
 
-The headless engine can drive the game with synthetic DOM events:
+The headless engine drives the game with synthetic DOM events:
 
 - `Space` dismisses the title.
 - `MULTIPLAYER` opens the name/room list.
 - The room code input is text box index 1; the name is box 0.
 - Use `rb_tap_text_box(index, x, y)` + `rb_type_text(str)` for game text fields.
 - `CREATE A ROOM`, `JOIN`, `READY`, `START MATCH` are normal clicks.
-- The host's start flow may show "N players are not ready" → `START ANYWAY`
-  or have the bot click `READY` first.
+- The host's start flow may show "N players are not ready" → `START ANYWAY` or
+  have the bot click `READY` first.
 - Joining a room whose match is already running puts you in as a **spectator**
   (`via: joined_running`); join before start to drive.
 
-The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game is responsive
-and lays out differently at 1280×800. Use 720p for the headless engine.
+The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game lays out
+differently at 1280×800. Use 720p for the headless engine.
 
-## 6. Spawnpoint / robot selection
+## 6. Spawnpoint / robot selection — deferred
 
-The room UI has a robot dropdown (team 359 in our tests), a `SWITCH ROBOTS`
-button, and a field map where the host can drag/place robots. The join packet
-`0x07` (14 bytes) carries the seat/robot/spawn selection token; the room state
-`0x06` echoes it. Choosing a specific spawn is a UI/protocol task that still
-needs a capture of each action. The CLI flag can map `--spawnpoint` to a seat
-index (red/blue 1/2/3) and either:
+Spawnpoint selection is intentionally **dropped for now**. A tuned system can
+read its first pose at spawn and infer where it is; the room UI/`0x07` packet
+capture can be revisited later. The CLI still accepts `--spawnpoint` but the
+engine logs that it is ignored and joins with the default seat.
 
-- click the field map at the seat coordinate before the match, or
-- send the equivalent room action packet once the `0x07` fields are fully
-  decoded.
-
-This is low risk but not finished in the prototype.
+The room UI has a robot dropdown (e.g. team 359), `SWITCH ROBOTS`, and a field
+map where the host can place robots. The join packet `0x07` carries the
+seat/robot/spawn token; the room state `0x06` echoes it. When spawn selection is
+needed, capture the field-map drag and the `0x07` fields; it is low risk but not
+finished.
 
 ## 7. Performance and architecture
 
@@ -285,8 +339,9 @@ debugging oracle.
 The game explicitly says no account is required for multiplayer, and there is a
 visible anti-automation check. Treat this as a community service:
 
-- **Ask the developer first** (Chief Delphi / Discord) before running bots in
-  public rooms. A private lobby with permission is the safe path.
+- This project is scoped to **private lobbies with your team/friends**. Do not
+  run bots in public rooms; ask the developer first if you ever want to.
+- Keep a human in the loop for private matches and label bots clearly.
 - **No accounts, no leaderboard entries, no event participation.** Label bots
   clearly in the username/room name.
 - **Don't bypass anti-cheat for competitive features.** The headless harness
@@ -303,31 +358,37 @@ visible anti-automation check. Treat this as a community service:
 | Headless engine boot + no-op GL | 1–2 days (done in this survey) |
 | Join/create/ready/start flow | 1–2 days (mostly done) |
 | Fuel extraction | 1 day (done) |
-| Robot pose extraction (authoritative/spectator) | 1 day (done) |
-| Predicted local pose / low-latency control | 3–7 days |
-| Analog gamepad + spawnpoint selection | 2–4 days |
-| Rust CLI + JSON/binary API + docs | 3–5 days |
-| Robust version/build handling | 1–2 days |
-| **Total to a usable procedural bot (Phase 1)** | **~2–3 weeks** |
+| Live robot pose, velocities, `me` identity | 1–2 days (done) |
+| Dynamic fuel count + base locator | 1 day (done) |
+| Virtual gamepad (axes + intake/outtake/shoot) | 1–2 days (done) |
+| 6-bot identity/alliance verification | 2–3 days |
+| Rust CLI + JSON API + docs | 3–5 days (mostly done) |
+| Version/build handling + local server | 1–2 days |
+| Spawnpoint selection (deferred) | 1–2 days |
+| **Total to a usable procedural bot (Phase 1)** | **~1–2 weeks remaining** |
 | Pure Rust Wasmtime engine (Phase 2) | 1–3 weeks |
 | Pure Rust physics reimplementation | months, not recommended |
 
-The networking and lobby automation are straightforward. The only genuinely
-uncertain part is finding the low-latency predicted robot pose; the
-authoritative/spectator pose is already available.
+The networking, lobby automation, live pose, fuel, and gamepad actions are
+solved. The remaining work is **multi-bot validation** (six robots, red/blue
+alliance frames, making sure each CLI instance controls exactly its own robot)
+and **version drift** (memory signatures/protocol after a game update).
 
 ## 11. Recommended next steps
 
-1. Wrap the current headless harness into a stable engine API (JSON lines):
-   `join`, `ready`, `start`, `state`, `input`, `leave`.
-2. Map the live/predicted pose by comparing the render/model transform in the
-   browser wasm memory with the headless client; add a `pose_source` field so
-   the bot can choose authoritative vs predicted.
-3. Implement a virtual gamepad for true analog `x/y/rotate`.
-4. Decode `0x07` and the room field map for `--spawnpoint`.
-5. Add a version/build check: fetch the page, parse `BUILD="..."`, download the
+1. Stabilize the current engine API (JSON lines): `join`, `ready`, `start`,
+   `state`, `input`, `leave`; keep `me`/`is_me` authoritative.
+2. Run a six-bot private match and verify `is_me`, alliance inference, and
+   red/blue control-frame conversion for every instance. Add a fail-fast check
+   if `me` is missing or duplicated.
+3. Add a version/build check: fetch the page, parse `BUILD="..."`, download the
    matching `index.js`/`index.wasm`, and refuse to run if the server version
    differs.
-6. Build the Rust CLI around the engine, then hand the state/input API to the
-   ML lead. Keep the engine protocol documented and versioned.
-7. In parallel, add an offline `step(n)` mode with a virtual clock for training.
+4. Point the engine at the team lead's local server (`--server`) and compare its
+   packet/state behavior with the public server.
+5. Add an offline/high-speed `step(n)` mode with a virtual clock for ML
+   training; this is separate from the real-time multiplayer bot.
+6. Revisit spawnpoint selection (`0x07` + field map) only if inferring the spawn
+   from the first pose is not enough.
+7. Hand the Rust `Engine`/`GameState`/`Input` API to the ML lead and the
+   procedural bot team.
