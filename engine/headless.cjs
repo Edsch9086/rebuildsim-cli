@@ -400,6 +400,7 @@ function inField(x, y) { return x > -12 && x < 12 && y > -8 && y < 8; }
 let fuelAddr = 0;
 let lastFuelScan = 0;
 let fuelPacketCount = 0;
+let lastFuelLocate = 0;
 const fuelPacket = new Map();
 let initialFuelPacket = null;
 
@@ -432,7 +433,10 @@ function parseFuelPacket(buf) {
     added++;
   }
   if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
-  if (!fuelAddr && fuelPacket.size) locateFuelFromPacket();
+  if (!fuelAddr && fuelPacket.size) {
+    const now = Date.now();
+    if (now - lastFuelLocate > 250) { lastFuelLocate = now; locateFuelFromPacket(); }
+  }
 }
 
 function locateFuelFromPacket() {
