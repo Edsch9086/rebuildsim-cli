@@ -35,16 +35,16 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Headless wasm boot in Node | ✅ works |
 | Live server handshake + room list | ✅ works |
 | Create room / join room by code | ✅ works |
-| Ready / start match | ✅ works (host start; auto-ready path in progress) |
+| Ready / start match | ✅ works (host auto-ready + start; joiner ready) |
 | Fuel positions from wasm memory | ✅ exact 456-record array, ID-indexed |
 | Fuel positions from server packets | ✅ `0x42` decoded |
 | Robot pose (server-acked / spectator) | ✅ player struct found |
 | Robot pose (local predicted, low latency) | ⚠️ needs more memory mapping |
-| Input packet (`0x40`) | ✅ decoded; keyboard drive verified |
+| Input packet (`0x40`) | ✅ decoded; teleop axis diagnostic moves the robot |
 | Auto/teleop phase from `0x41` clock | ✅ engine reports `phase` |
 | Analog axes / gamepad | ⚠️ not yet wired |
 | Spawnpoint selection | ⚠️ UI/protocol capture in progress |
-| Rust CLI | 🧱 skeleton |
+| Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
 
