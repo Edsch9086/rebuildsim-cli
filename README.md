@@ -6,7 +6,7 @@ It contains:
 - `docs/SURVEY.md` — what the game is, how it works, feasibility, risks, recommended architecture.
 - `docs/PROTOCOL.md` — observed WebSocket packets, input encoding, and wasm memory map.
 - `engine/` — a proof-of-concept headless engine that runs the real game wasm in Node with a stubbed WebGL2 context.
-- `cli/` — a Rust CLI skeleton that launches the engine and exposes a small state/input API.
+- `cli/` — a Rust library + demo CLI that launches the engine and exposes a small state/input API.
 
 The game assets are **not** committed. `engine/prepare.mjs` downloads the current
 `index.js` / `index.wasm` from rebuildsim.com into `engine/cache/`.
