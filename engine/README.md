@@ -44,6 +44,8 @@ Flags:
 --spawn <S>         reserved; ignored (infer spawn from first pose)
   --server <HOST:PORT> connect to a local server instead of rebuildsim.com
   --gamepad           use the virtual gamepad (analog + action buttons)
+  --fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/max)
+  --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
 ```
@@ -105,7 +107,9 @@ Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
 - One engine = one wasm instance + one WebSocket. For multiple bots, spawn one
-  process per bot and respect the server's per-IP connection limit.
+  process per bot. The **public server has a per-IP connection limit**; a second
+  headless engine from the same IP was closed in testing. Use the local server
+  or separate IPs for six-bot runs.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
   fetches the latest build; the fuel-array locator and player-state signature are
   heuristic and must be re-validated after a game update.

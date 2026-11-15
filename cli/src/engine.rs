@@ -21,6 +21,8 @@ pub struct EngineOptions {
     pub asset_dir: Option<PathBuf>,
     pub debug: bool,
     pub gamepad: bool,
+    pub fuel: Option<String>,
+    pub server: Option<String>,
 }
 
 impl EngineOptions {
@@ -36,6 +38,8 @@ impl EngineOptions {
             asset_dir: None,
             debug: false,
             gamepad: true,
+            fuel: None,
+            server: None,
         }
     }
 }
@@ -154,6 +158,12 @@ impl Engine {
         }
         if opts.gamepad {
             cmd.arg("--gamepad");
+        }
+        if let Some(fuel) = &opts.fuel {
+            cmd.arg("--fuel").arg(fuel);
+        }
+        if let Some(server) = &opts.server {
+            cmd.arg("--server").arg(server);
         }
         cmd.arg("--emit-hz").arg(opts.emit_hz.to_string());
         if let Some(dir) = &opts.asset_dir {

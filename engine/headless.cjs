@@ -245,6 +245,7 @@ const OPT = {
   debug: process.argv.includes('--debug'),
   gamepad: process.argv.includes('--gamepad'),
   server: getArg('server', ''),
+  fuel: getArg('fuel', ''),
 };
 globalThis.__RB_DEBUG = OPT.debug;
 if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join(ASSET_DIR, 'index.wasm'))) {
@@ -253,6 +254,7 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
 }
 log('engine options', JSON.stringify(OPT));
 if (OPT.spawn) log('note: --spawn is not implemented yet; using the default seat');
+if (OPT.fuel) log('fuel rule request', OPT.fuel);
 
 if (OPT.server) {
   const [host, port] = OPT.server.split(':');
@@ -749,11 +751,35 @@ function onTrack(name, params) {
     roomCode = roomCode || OPT.code;
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emit({ type: 'room', code: roomCode, host, seated, role: p.role });
-    if (host && OPT.start) {
-      setTimeout(() => globalThis.__ctl.click(646, 688), 900);
-      setTimeout(() => globalThis.__ctl.click(1150, 688), 1800);
-    } else if (seated) {
-      setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+    const readyAndStart = () => {
+      if (host && OPT.start) {
+        setTimeout(() => globalThis.__ctl.click(646, 688), 900);
+        setTimeout(() => globalThis.__ctl.click(1150, 688), 1800);
+      } else if (seated) {
+        setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+      }
+    };
+    if (host && OPT.fuel) {
+      // Room settings > Rules > Fuel count. 720p coordinates.
+      const raw = String(OPT.fuel).replace('%', '').toLowerCase();
+      let clicks = 0, dir = 1;
+      if (raw === 'max' || raw === 'full') { clicks = 20; dir = 1; }
+      else {
+        const pct = Number(raw);
+        if (!Number.isFinite(pct) || pct <= 0) clicks = 0;
+        else if (pct < 100) { clicks = Math.round((100 - pct) / 25); dir = -1; }
+        else if (pct > 100) { clicks = Math.round((pct - 100) / 25); dir = 1; }
+      }
+      setTimeout(() => globalThis.__ctl.click(752, 118), 500);   // room settings
+      setTimeout(() => globalThis.__ctl.click(794, 118), 1000);  // rules tab
+      for (let i = 0; i < clicks; i++) {
+        setTimeout(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
+      }
+      setTimeout(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
+      setTimeout(readyAndStart, 1500 + clicks * 250 + 1000);
+      log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
+    } else {
+      readyAndStart();
     }
   }
   if (name === 'match_start' && !flow.match) {

@@ -27,6 +27,8 @@ struct Args {
     watch: bool,
     debug: bool,
     keyboard: bool,
+    fuel: Option<String>,
+    server: Option<String>,
 }
 
 impl Default for Args {
@@ -44,6 +46,8 @@ impl Default for Args {
             watch: false,
             debug: false,
             keyboard: false,
+            fuel: None,
+            server: None,
         }
     }
 }
@@ -69,6 +73,8 @@ OPTIONS:
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
   --keyboard          use digital keyboard controls instead of the virtual gamepad
+  --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, max)
+  --server <HOST:PORT> connect to a local server build
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -91,6 +97,8 @@ fn parse_args() -> Result<Args, String> {
             "--watch" => a.watch = true,
             "--debug" => a.debug = true,
             "--keyboard" => a.keyboard = true,
+            "--fuel" => a.fuel = Some(it.next().ok_or("--fuel needs a value")?),
+            "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
             "--emit-hz" => {
                 a.emit_hz = it.next().ok_or("--emit-hz needs a value")?.parse().map_err(|_| "bad --emit-hz")?
             }
@@ -155,6 +163,8 @@ fn main() {
     opts.asset_dir = args.asset_dir.clone();
     opts.debug = args.debug;
     opts.gamepad = !args.keyboard;
+    opts.fuel = args.fuel.clone();
+    opts.server = args.server.clone();
 
     eprintln!("engine: {}", args.engine.display());
     let mut engine = match Engine::spawn(&opts) {

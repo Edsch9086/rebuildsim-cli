@@ -326,13 +326,17 @@ debugging oracle.
 - One engine per bot; each bot needs its own wasm instance and WebSocket.
 - Six bots = six Node processes (~1 GB RSS, ~1 core total). Acceptable on a
   small server, not on a laptop with other work.
-- The server has a **per-IP connection limit** and room expiry. Don't run a
-  swarm from one address; coordinate with the developer.
+- The public server has a **per-IP connection limit** and rate limiting. In our
+  test a browser host + one headless engine worked, but a second headless engine
+  from the same IP was closed with code 1006 before it could join. Six bots on
+  one public IP is therefore not reliable. Use the team lead's **local server**
+  (or separate egress IPs) for six-bot tests; the engine has `--server`.
+- Rooms also expire after ~10 minutes if nobody else joins.
 - For ML self-play, run **offline/singleplayer** matches and step the wasm
   simulation faster than real-time. The engine already runs without a server;
   the next step is a virtual clock and a direct `step(n)` API so training can
-  run headless at high throughput. This is separate from the multiplayer CLI
-  and probably the highest-value thing for the ML lead.
+  run headless at high throughput. The team lead's local server is also the
+  right place to run six-bot matches without the public per-IP limit.
 
 ## 9. Ethics / ToS / anti-bot
 
@@ -378,9 +382,10 @@ and **version drift** (memory signatures/protocol after a game update).
 
 1. Stabilize the current engine API (JSON lines): `join`, `ready`, `start`,
    `state`, `input`, `leave`; keep `me`/`is_me` authoritative.
-2. Run a six-bot private match and verify `is_me`, alliance inference, and
-   red/blue control-frame conversion for every instance. Add a fail-fast check
-   if `me` is missing or duplicated.
+2. Run a six-bot private match **on the local server** (the public per-IP limit
+   blocks six Node clients from one address) and verify `is_me`, alliance
+   inference, and red/blue control-frame conversion for every instance. Add a
+   fail-fast check if `me` is missing or duplicated.
 3. Add a version/build check: fetch the page, parse `BUILD="..."`, download the
    matching `index.js`/`index.wasm`, and refuse to run if the server version
    differs.
