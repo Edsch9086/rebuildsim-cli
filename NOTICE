@@ -1,0 +1,19 @@
+# Notice
+
+This project is an independent interoperability/research effort. It is not
+affiliated with or endorsed by the REBUILD Simulator authors or FIRST.
+
+- The REBUILD Simulator client (`index.js`, `index.wasm`, models, textures) is
+  **not** included in this repository. `engine/prepare.mjs` downloads the current
+  build from `https://rebuildsim.com/` at runtime, and the downloaded files stay
+  in the gitignored `engine/cache/` directory.
+- The survey and protocol notes were produced by observing the public client and
+  its network traffic for interoperability and bot research. Do not use them to
+  attack, overload, or scrape the service.
+- Run bots only in private lobbies and only with the developer's consent. Do not
+  use bots for leaderboards, events, or competitive play. Keep usernames clearly
+  labeled as bots.
+- If you redistribute code from this repository, keep this notice and do not
+  redistribute the game assets.
+
+The code in this repository is provided under the MIT license (see `LICENSE`).

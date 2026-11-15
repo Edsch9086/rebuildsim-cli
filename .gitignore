@@ -1,0 +1,10 @@
+# downloaded game assets (never commit these)
+engine/cache/
+# Rust build output
+cli/target/
+# local logs/dumps
+*.log
+*.jsonl
+*.bin
+node_modules/
+target/
