@@ -550,16 +550,17 @@ function findPose(name) {
     const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x23);
     const heading = f32(cached + 0x3f), valid = f32(cached + 0x57);
     if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(heading) && inField(x, y) && Math.abs(heading) <= 20 && valid === 1) {
-      return { x, y, z, heading, addr: cached };
+      return { x, y, z, heading, addr: cached, source: (cached >= 0x500000 && cached < 0x530000) ? 'predicted' : 'acked' };
     }
     poseCache.delete(name);
   }
   const buf = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
   const needle = Buffer.from(name, 'utf8');
   let pos = 0;
+  const candidates = [];
   while (true) {
     const occ = buf.indexOf(needle, pos);
-    if (occ < 0) return null;
+    if (occ < 0) break;
     pos = occ + 1;
     if (occ < 1 || occ + 0x60 >= a.length) continue;
     if (a[occ - 1] !== 1) continue;
@@ -572,9 +573,16 @@ function findPose(name) {
     if (!inField(x, y)) continue;
     if (Math.abs(heading) > 20) continue;
     if (valid !== 1) continue;
-    poseCache.set(name, occ);
-    return { x, y, z, heading, addr: occ };
+    candidates.push({ x, y, z, heading, addr: occ });
   }
+  if (!candidates.length) return null;
+  // The render/model heap region carries a higher-rate predicted copy.
+  const predicted = candidates.filter(c => c.addr >= 0x500000 && c.addr < 0x530000);
+  const chosen = predicted.length
+    ? predicted.sort((a, b) => b.addr - a.addr)[0]
+    : candidates.sort((a, b) => a.addr - b.addr)[0];
+  poseCache.set(name, chosen.addr);
+  return { ...chosen, source: predicted.length ? 'predicted' : 'acked' };
 }
 
 const lastPose = new Map();
@@ -615,7 +623,7 @@ function readRobots() {
       allianceByName.set(name, alliance);
     }
     out.push({
-      name, is_me: name === OPT.username, alliance,
+      name, is_me: name === OPT.username, alliance, pose_source: p.source || 'unknown',
       x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4),
       heading: +p.heading.toFixed(4), vx: +vx.toFixed(3), vy: +vy.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
@@ -856,6 +864,48 @@ setInterval(() => {
   });
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
+let trace = null;
+function finishTrace() {
+  if (!trace) return;
+  clearInterval(trace.timer);
+  const meta = {
+    regions: trace.regions, per: trace.per, hz: trace.hz,
+    frames: trace.data.length, times: trace.times,
+    me: readRobots().find(r => r.is_me) || null,
+  };
+  try {
+    fs.writeFileSync(trace.path + '.bin', Buffer.concat(trace.data));
+    fs.writeFileSync(trace.path + '.json', JSON.stringify(meta));
+    log('trace written', trace.path, meta.frames, meta.per);
+  } catch (e) { log('trace write error', String(e)); }
+  trace = null;
+}
+function startTrace(cmd) {
+  if (trace) return;
+  const regions = (cmd.regions || []).map(([start, len]) => ({ start: Number(start), len: Number(len) }));
+  if (!regions.length || !mem) return;
+  const per = regions.reduce((a, r) => a + r.len, 0);
+  trace = {
+    regions, per,
+    hz: Math.max(1, Math.min(120, Number(cmd.hz) || 60)),
+    frames: Math.max(1, Math.min(1200, Number(cmd.frames) || 180)),
+    path: cmd.path || '/tmp/opencode/trace',
+    data: [], times: [], timer: null,
+  };
+  trace.timer = setInterval(() => {
+    if (!trace || !mem) return;
+    const parts = trace.regions.map(r => {
+      const end = Math.min(r.start + r.len, mem.buffer.byteLength);
+      if (r.start >= end) return Buffer.alloc(0);
+      return Buffer.from(mem.buffer, r.start, end - r.start).slice();
+    });
+    trace.data.push(Buffer.concat(parts));
+    trace.times.push(Date.now());
+    if (trace.data.length >= trace.frames) finishTrace();
+  }, Math.max(1, Math.round(1000 / trace.hz)));
+  log('trace started', JSON.stringify(trace.regions), 'hz', trace.hz, 'frames', trace.frames, 'path', trace.path);
+}
+
 // stdin command API
 const readline = require('node:readline');
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
@@ -877,6 +927,7 @@ rl.on('line', (line) => {
     refreshPad();
     log('PAD', JSON.stringify({ axes: pad.axes, buttons: pad.buttons.map(b => b.pressed ? 1 : 0) }));
   }
+  else if (cmd.type === 'trace') startTrace(cmd);
   else if (cmd.type === 'ready') globalThis.__ctl.click(646, 688);
   else if (cmd.type === 'start') globalThis.__ctl.click(1150, 688);
   else if (cmd.type === 'leave') globalThis.__ctl.click(144, 688);

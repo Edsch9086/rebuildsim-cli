@@ -41,7 +41,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Ready / start match | ✅ works (host auto-ready + start; joiner ready) |
 | Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
-| Robot pose (local simulation) | ✅ live player struct, x/y/heading/vel |
+| Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
 | Robot identity | ✅ `me` + `is_me` by username; alliance heuristic |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |

@@ -100,10 +100,9 @@ Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
 
 - Driver input works during **auto**; only the 3-second countdown is
   non-interactive. `phase` is `countdown`/`auto`/`teleop`/`end`.
-- Robot pose is the live player-state copy in wasm memory; `me`/`is_me` identify
-  this CLI's robot. The copy updates at **~15 Hz**; 30 Hz emission repeats
-  poses. A higher-rate render/predicted pose is still a TODO. Alliance is a
-  spawn-x heuristic for now.
+- Robot pose prefers the render-region **predicted copy** (~48 Hz) and falls
+  back to the ~15 Hz player copy; `pose_source` says which. `me`/`is_me`
+  identify this CLI's robot. Alliance is a spawn-x heuristic for now.
 - `--spawn` is deferred; infer the spawn from `me`.
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
