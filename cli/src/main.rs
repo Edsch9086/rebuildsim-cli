@@ -26,6 +26,7 @@ struct Args {
     demo: bool,
     watch: bool,
     debug: bool,
+    keyboard: bool,
 }
 
 impl Default for Args {
@@ -42,6 +43,7 @@ impl Default for Args {
             demo: false,
             watch: false,
             debug: false,
+            keyboard: false,
         }
     }
 }
@@ -66,6 +68,7 @@ OPTIONS:
   --demo              run a short forward/strafe/reverse/turn diagnostic in teleop
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
+  --keyboard          use digital keyboard controls instead of the virtual gamepad
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -87,6 +90,7 @@ fn parse_args() -> Result<Args, String> {
             "--demo" => a.demo = true,
             "--watch" => a.watch = true,
             "--debug" => a.debug = true,
+            "--keyboard" => a.keyboard = true,
             "--emit-hz" => {
                 a.emit_hz = it.next().ok_or("--emit-hz needs a value")?.parse().map_err(|_| "bad --emit-hz")?
             }
@@ -150,6 +154,7 @@ fn main() {
     opts.emit_hz = args.emit_hz;
     opts.asset_dir = args.asset_dir.clone();
     opts.debug = args.debug;
+    opts.gamepad = !args.keyboard;
 
     eprintln!("engine: {}", args.engine.display());
     let mut engine = match Engine::spawn(&opts) {
@@ -216,8 +221,8 @@ struct Demo {
 
 impl Demo {
     fn observe(&mut self, state: &GameState) {
-        if self.start.is_none() && state.phase == "teleop" {
-            eprintln!("demo: teleop detected");
+        if self.start.is_none() && (state.phase == "auto" || state.phase == "teleop") {
+            eprintln!("demo: auto/teleop detected (phase={})", state.phase);
             self.start = Some(Instant::now());
             self.phase = 0;
         }

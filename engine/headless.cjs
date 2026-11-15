@@ -186,6 +186,18 @@ globalThis.navigator = {
   share: undefined, canShare: () => false, vibrate: () => true, keyboard: undefined,
   userActivation: { isActive: true, hasBeenActive: true },
 };
+// Virtual standard gamepad. The Emscripten GLFW layer polls
+// navigator.getGamepads() every frame and forwards axes/buttons into wasm.
+const pad = {
+  id: 'Xbox 360 Controller (XInput STANDARD GAMEPAD)',
+  index: 0, connected: true, mapping: 'standard',
+  axes: [0, 0, 0, 0, 0, 0],
+  buttons: Array.from({ length: 16 }, () => ({ pressed: false, value: 0, touched: false })),
+  timestamp: 0,
+};
+globalThis.navigator.getGamepads = () => [pad, null, null, null];
+globalThis.__pad = pad;
+
 globalThis.location = {
   href: 'https://rebuildsim.com/', origin: 'https://rebuildsim.com', protocol: 'https:',
   host: 'rebuildsim.com', hostname: 'rebuildsim.com', port: '', pathname: '/', search: '', hash: '',
@@ -231,6 +243,8 @@ const OPT = {
   spawn: getArg('spawn', ''),
   emitHz: Math.max(1, Math.min(60, Number(getArg('emit-hz', '10')) || 10)),
   debug: process.argv.includes('--debug'),
+  gamepad: process.argv.includes('--gamepad'),
+  server: getArg('server', ''),
 };
 globalThis.__RB_DEBUG = OPT.debug;
 if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join(ASSET_DIR, 'index.wasm'))) {
@@ -239,6 +253,17 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
 }
 log('engine options', JSON.stringify(OPT));
 if (OPT.spawn) log('note: --spawn is not implemented yet; using the default seat');
+
+if (OPT.server) {
+  const [host, port] = OPT.server.split(':');
+  globalThis.location.host = OPT.server;
+  globalThis.location.hostname = host;
+  globalThis.location.port = port || '';
+  globalThis.location.protocol = 'http:';
+  globalThis.location.origin = 'http://' + OPT.server;
+  globalThis.location.href = 'http://' + OPT.server + '/';
+  log('using server', OPT.server);
+}
 
 const wslog = [];
 let roomNames = new Set([OPT.username]);
@@ -285,6 +310,8 @@ function handleServerFrame(buf) {
       const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
       lastMatchTime = dv.getFloat32(10, true);
     }
+  } else if (type === 0x42) {
+    parseFuelPacket(buf);
   }
 }
 
@@ -316,6 +343,10 @@ globalThis.WebSocket = class extends NativeWS {
       if (buf) {
         wslog.push({ dir: 'send', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
         if (wslog.length > 20000) wslog.splice(0, 10000);
+        if (globalThis.__RB_DEBUG && buf[0] === 0x40) {
+          const h = buf.toString('hex');
+          if (h !== globalThis.__lastInputHex) { globalThis.__lastInputHex = h; log('INPUT', h); }
+        }
       }
       return s(data);
     };
@@ -366,18 +397,89 @@ function inField(x, y) { return x > -12 && x < 12 && y > -8 && y < 8; }
 
 let fuelAddr = 0;
 let lastFuelScan = 0;
-function findFuelArray() {
-  if (!mem) return 0;
+let fuelPacketCount = 0;
+const fuelPacket = new Map();
+let initialFuelPacket = null;
+
+function parseFuelPacket(buf) {
+  if (buf.length < 9) return;
+  const total = buf.readUInt16LE(5);
+  const n = buf.readUInt16LE(7);
+  if (total !== fuelPacketCount) {
+    fuelPacketCount = total;
+    fuelAddr = 0;
+    fuelPacket.clear();
+  }
+  let added = 0;
+  for (let i = 0; i < n; i++) {
+    const off = 9 + i * 24;
+    if (off + 24 > buf.length) break;
+    const id = buf.readUInt16LE(off);
+    if (id >= total && total > 0) continue;
+    fuelPacket.set(id, {
+      id,
+      count: buf.readUInt16LE(off + 2),
+      flags: buf.readUInt32LE(off + 8),
+      x: buf.readUInt16LE(off + 12),
+      y: buf.readUInt16LE(off + 14),
+      z: buf.readUInt16LE(off + 16),
+      vx: buf.readUInt16LE(off + 18),
+      vy: buf.readUInt16LE(off + 20),
+      vz: buf.readUInt16LE(off + 22),
+    });
+    added++;
+  }
+  if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
+  if (!fuelAddr && fuelPacket.size) locateFuelFromPacket();
+}
+
+function locateFuelFromPacket() {
+  if (!mem || !fuelPacketCount) return 0;
   const a = u8();
-  const lim = Math.min(a.length, 0x800000) - 456 * 7;
+  const hay = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
+  const probes = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount).slice(0, 10);
+  if (!probes.length) return 0;
+  const pat = Buffer.alloc(4);
+  for (const probe of probes) {
+    pat.writeUInt16LE(probe.x, 0);
+    pat.writeUInt16LE(probe.y, 2);
+    let pos = 0, hits = 0;
+    while (hits++ < 40) {
+      const hit = hay.indexOf(pat, pos);
+      if (hit < 0) break;
+      pos = hit + 1;
+      const base = hit - 1 - probe.id * 7;
+      if (base < 0) continue;
+      let ok = 0, total = 0;
+      for (const q of probes) {
+        const off = base + q.id * 7;
+        if (off + 7 > a.length) continue;
+        const flag = a[off];
+        if (flag !== 0 && flag !== 1) continue;
+        const mx = a[off + 1] | (a[off + 2] << 8);
+        const my = a[off + 3] | (a[off + 4] << 8);
+        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3) ok++;
+        total++;
+      }
+      if (total >= 4 && ok >= Math.max(3, Math.floor(total * 0.7))) {
+        fuelAddr = base;
+        log('fuel array at', '0x' + base.toString(16), 'count', fuelPacketCount);
+        return base;
+      }
+    }
+  }
+  return 0;
+}
+
+function scanFuelRun() {
+  if (!mem) return 0;
+  const count = fuelPacketCount;
+  if (!count || count > 2048) return 0;
+  const a = u8();
+  const lim = Math.min(a.length, 0x800000) - count * 7;
   for (let i = 0x10000; i < lim; i++) {
-    // cheap prefilter on the first record
-    const f0 = a[i];
-    if (f0 !== 0 && f0 !== 1) continue;
-    const z0 = a[i + 5] | (a[i + 6] << 8);
-    if (z0 < 32700 || z0 > 33200) continue;
     let ok = true;
-    for (let j = 1; j < 24; j++) {
+    for (let j = 0; j < Math.min(count, 64); j++) {
       const off = i + j * 7;
       const f = a[off];
       if (f !== 0 && f !== 1) { ok = false; break; }
@@ -385,31 +487,50 @@ function findFuelArray() {
       if (z < 32700 || z > 33200) { ok = false; break; }
     }
     if (!ok) continue;
-    for (let j = 24; j < 456; j++) {
+    for (let j = 64; j < count; j++) {
       const off = i + j * 7;
       const f = a[off];
       if (f !== 0 && f !== 1) { ok = false; break; }
       const z = a[off + 5] | (a[off + 6] << 8);
       if (z < 32700 || z > 33200) { ok = false; break; }
     }
-    if (ok) { fuelAddr = i; log('fuel array at', '0x' + i.toString(16)); return i; }
+    if (ok) { fuelAddr = i; log('fuel array (scan) at', '0x' + i.toString(16), 'count', count); return i; }
   }
   return 0;
 }
 
+function findFuelArray() {
+  if (!mem) return 0;
+  if (fuelAddr) return fuelAddr;
+  if (fuelPacket.size) {
+    const b = locateFuelFromPacket();
+    if (b) return b;
+  }
+  return scanFuelRun();
+}
+
 function readFuel() {
-  if (!fuelAddr || !mem) return [];
+  if (!fuelAddr || !mem || !fuelPacketCount) return [];
   const a = u8();
-  if (fuelAddr + 456 * 7 > a.length) { fuelAddr = 0; return []; }
+  const count = fuelPacketCount;
+  if (fuelAddr + count * 7 > a.length) { fuelAddr = 0; return []; }
   const out = [];
-  for (let i = 0; i < 456; i++) {
+  for (let i = 0; i < count; i++) {
     const off = fuelAddr + i * 7;
     const present = a[off] === 1;
-    if (!present) continue;
     const x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
     const y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
     const z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
-    out.push({ id: i, x: +x.toFixed(4), y: +y.toFixed(4), z: +z.toFixed(4), present: true });
+    const p = fuelPacket.get(i);
+    const item = { id: i, x: +x.toFixed(4), y: +y.toFixed(4), z: +z.toFixed(4), present };
+    if (p) {
+      item.vx = +(((p.vx - 0x8000) / 4096)).toFixed(3);
+      item.vy = +(((p.vy - 0x8000) / 4096)).toFixed(3);
+      item.vz = +(((p.vz - 0x8000) / 4096)).toFixed(3);
+      item.count = p.count;
+      item.flags = p.flags;
+    }
+    out.push(item);
   }
   return out;
 }
@@ -418,7 +539,6 @@ const poseCache = new Map();
 function findPose(name) {
   if (!mem || !name) return null;
   const a = u8();
-  const buf = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
   const cached = poseCache.get(name);
   if (cached != null && cached > 0 && cached + 0x60 < a.length && a[cached - 1] === 1) {
     const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x23);
@@ -428,6 +548,7 @@ function findPose(name) {
     }
     poseCache.delete(name);
   }
+  const buf = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
   const needle = Buffer.from(name, 'utf8');
   let pos = 0;
   while (true) {
@@ -451,13 +572,24 @@ function findPose(name) {
 }
 
 const lastPose = new Map();
+const allianceByName = new Map();
 function readRobots() {
   const out = [];
   for (const name of roomNames) {
-    const p = findPose(name);
-    if (!p) continue;
+    let p = findPose(name);
     const now = Date.now() / 1000;
     const prev = lastPose.get(name);
+    if (!p) {
+      if (!prev || now - prev.t > 2) continue;
+      // keep the last known pose for a frame instead of dropping a robot
+      const alliance = allianceByName.get(name) || (prev.x < 0 ? 'red' : 'blue');
+      out.push({
+        name, is_me: name === OPT.username, alliance, stale: true,
+        x: +prev.x.toFixed(4), y: +prev.y.toFixed(4), z: +prev.z.toFixed(4),
+        heading: +prev.heading.toFixed(4), vx: 0, vy: 0, vz: 0, yawRate: 0,
+      });
+      continue;
+    }
     let vx = 0, vy = 0, vz = 0, yawRate = 0;
     if (prev && now > prev.t + 0.01) {
       const dt = now - prev.t;
@@ -470,8 +602,15 @@ function readRobots() {
       yawRate = dh / dt;
     }
     lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading });
+    let alliance = allianceByName.get(name);
+    if (!alliance) {
+      // heuristic captured at first sight (spawn side); red x<0, blue x>0
+      alliance = p.x < 0 ? 'red' : 'blue';
+      allianceByName.set(name, alliance);
+    }
     out.push({
-      name, x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4),
+      name, is_me: name === OPT.username, alliance,
+      x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4),
       heading: +p.heading.toFixed(4), vx: +vx.toFixed(3), vy: +vy.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
     });
@@ -504,6 +643,13 @@ function mouse(type, x, y, button = 0, buttons = 1) {
 function click(x, y) { mouse('mousemove', x, y, 0, 0); setTimeout(() => mouse('mousedown', x, y, 0, 1), 50); setTimeout(() => mouse('mouseup', x, y, 0, 0), 100); }
 globalThis.__ctl = { key, tapKey, mouse, click, canvas, Module, getMem: () => mem, wslog };
 
+function refreshPad() {
+  try {
+    const e = ev('gamepadconnected', { gamepad: pad });
+    globalThis.window.dispatchEvent(e);
+  } catch (e) { log('refreshPad error', String(e)); }
+}
+
 
 const KEY = {
   w: ['w', 'KeyW', 87], s: ['s', 'KeyS', 83], a: ['a', 'KeyA', 65], d: ['d', 'KeyD', 68],
@@ -519,6 +665,22 @@ function setKey(name, on) {
 }
 function applyInput(cmd) {
   const x = Number(cmd.x) || 0, y = Number(cmd.y) || 0, r = Number(cmd.rotate) || 0;
+  if (OPT.gamepad) {
+    const clamp = (v) => Math.max(-1, Math.min(1, v));
+    pad.axes[0] = clamp(x);
+    pad.axes[1] = -clamp(y);
+    pad.axes[2] = clamp(r);
+    pad.axes[3] = 0;
+    pad.axes[4] = cmd.intake ? 1 : 0;
+    pad.axes[5] = cmd.shoot ? 1 : 0;
+    const setBtn = (i, on) => { pad.buttons[i].pressed = !!on; pad.buttons[i].value = on ? 1 : 0; };
+    setBtn(6, cmd.intake);   // LT
+    setBtn(7, cmd.shoot);    // RT
+    setBtn(4, cmd.outtake);  // LB
+    pad.timestamp = performance.now();
+    refreshPad();
+    return;
+  }
   setKey('w', y > 0.15); setKey('s', y < -0.15);
   setKey('d', x > 0.15); setKey('a', x < -0.15);
   setKey('l', r > 0.15); setKey('j', r < -0.15);
@@ -559,7 +721,7 @@ function onTrack(name, params) {
     } else if (path === '/multi/match' && !flow.match) {
       flow.match = true;
       matchStarted = true;
-      emit({ type: 'match', phase: 'auto', time: lastMatchTime });
+      emit({ type: 'match', phase: 'countdown', time: lastMatchTime });
     }
   }
   if (name === 'name_prompt' && !flow.name) {
@@ -598,8 +760,9 @@ function onTrack(name, params) {
     flow.match = true;
     matchStarted = true;
     poseCache.clear();
+    allianceByName.clear();
     fuelAddr = 0;
-    emit({ type: 'match', phase: 'auto', time: lastMatchTime });
+    emit({ type: 'match', phase: 'countdown', time: lastMatchTime });
   }
 }
 
@@ -609,6 +772,15 @@ globalThis.rbLoaded = () => {};
 
 const rbGame = require(path.join(ASSET_DIR, 'index.js'));
 rbGame(Module).then(() => log('rbGame resolved')).catch((e) => console.error('rbGame rejected', e));
+
+// make the virtual gamepad visible to raylib/GLFW after boot
+setTimeout(() => {
+  try {
+    const e = ev('gamepadconnected', { gamepad: pad });
+    globalThis.window.dispatchEvent(e);
+    log('gamepadconnected dispatched');
+  } catch (e) { log('gamepad event error', String(e)); }
+}, 4200);
 
 // title screen: press any button after the runtime has had a moment
 setTimeout(() => {
@@ -641,14 +813,16 @@ setInterval(() => {
   const fuel = readFuel();
   let phase = 'match';
   if (lastMatchTime != null) {
-    if (lastMatchTime > 143.0) phase = 'auto';
+    if (lastMatchTime > 160.0) phase = 'countdown';
+    else if (lastMatchTime > 140.0) phase = 'auto';
     else if (lastMatchTime > 0.0) phase = 'teleop';
     else phase = 'end';
   }
+  const me = robots.find(r => r.is_me) || null;
   emit({
     type: 'state', seq: seq++, t: Date.now() / 1000,
     phase, time: lastMatchTime,
-    robots, fuel,
+    me, robots, fuel, fuel_count: fuelPacketCount,
   });
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
@@ -661,6 +835,18 @@ rl.on('line', (line) => {
   let cmd;
   try { cmd = JSON.parse(s); } catch { log('bad command', s); return; }
   if (cmd.type === 'input') applyInput(cmd);
+  else if (cmd.type === 'pad') {
+    if (Array.isArray(cmd.axes)) for (let i = 0; i < Math.min(pad.axes.length, cmd.axes.length); i++) pad.axes[i] = Number(cmd.axes[i]) || 0;
+    if (Array.isArray(cmd.buttons)) for (let i = 0; i < Math.min(pad.buttons.length, cmd.buttons.length); i++) {
+      const v = cmd.buttons[i];
+      const on = typeof v === 'object' ? !!v.pressed : !!v;
+      pad.buttons[i].pressed = on;
+      pad.buttons[i].value = on ? (typeof v === 'object' ? Number(v.value ?? 1) : 1) : 0;
+    }
+    pad.timestamp = performance.now();
+    refreshPad();
+    log('PAD', JSON.stringify({ axes: pad.axes, buttons: pad.buttons.map(b => b.pressed ? 1 : 0) }));
+  }
   else if (cmd.type === 'ready') globalThis.__ctl.click(646, 688);
   else if (cmd.type === 'start') globalThis.__ctl.click(1150, 688);
   else if (cmd.type === 'leave') globalThis.__ctl.click(144, 688);

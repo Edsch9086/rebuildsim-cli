@@ -15,18 +15,21 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 
 - The game is C++/raylib 6.0 compiled to wasm, served by Cloudflare, with a custom
   binary WebSocket protocol at `wss://rebuildsim.com/ws`.
-- The server sends **fuel state** (456 fuel, 48-record chunks, fixed-point positions)
-  and match/room state. It does **not** send robot poses. Robot poses come from the
-  client-side deterministic simulation.
+- The server sends **fuel state** (1 to ~4,300 fuel depending on gamerules, in
+  48-record chunks, fixed-point positions) and match/room state. It does **not**
+  send robot poses. Robot poses come from the client-side deterministic
+  simulation.
 - The wasm runs **headless in Node** with a no-op WebGL2 context at ~59 fps. No
   Chromium, no Playwright, no GPU. Measured ~19% of one core and ~180 MB RSS.
 - We can drive the real client's UI in the headless engine (create/join by code,
   ready, start) and read the live fuel array + player pose structs out of wasm memory.
+  The player-state pose updates live; driver input works during auto (after the
+  3-second countdown).
 - The practical architecture is **Rust CLI + headless wasm engine sidecar**. A pure
   Rust native client would require reimplementing the whole physics sim; not worth it.
-- The main remaining RE risk is a robust locator for the **predicted** local robot
-  pose (the server-acked player copy lags). Fuel and the authoritative/spectator
-  player state are solved.
+- The remaining risks are robot identity in a 6-bot lobby (we expose `me` / `is_me`),
+  alliance-frame control conventions, spawn selection (dropped for now), and
+  game-version drift.
 
 ## Status
 
@@ -36,14 +39,14 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Live server handshake + room list | ✅ works |
 | Create room / join room by code | ✅ works |
 | Ready / start match | ✅ works (host auto-ready + start; joiner ready) |
-| Fuel positions from wasm memory | ✅ exact 456-record array, ID-indexed |
+| Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
-| Robot pose (server-acked / spectator) | ✅ player struct found |
-| Robot pose (local predicted, low latency) | ⚠️ needs more memory mapping |
-| Input packet (`0x40`) | ✅ decoded; teleop axis diagnostic moves the robot |
-| Auto/teleop phase from `0x41` clock | ✅ engine reports `phase` |
-| Analog axes / gamepad | ⚠️ not yet wired |
-| Spawnpoint selection | ⚠️ UI/protocol capture in progress |
+| Robot pose (local simulation) | ✅ live player struct, x/y/heading/vel |
+| Robot identity | ✅ `me` + `is_me` by username; alliance heuristic |
+| Input packet (`0x40`) | ✅ axes + action bits decoded |
+| Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
+| Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop |
+| Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
@@ -61,12 +64,15 @@ Rust CLI (from the repo root):
 
 ```bash
 cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot
-# or create/start a private room and run the axis diagnostic:
+# use --keyboard for digital controls instead of the virtual gamepad
+# create/start a private room and run the axis diagnostic:
 cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --demo
 ```
 
 If the engine assets live somewhere else, pass `--asset-dir <DIR>` or set
 `RB_ASSET_DIR`. The engine uses the current build downloaded by `prepare.mjs`.
+To point at a locally hosted server build, pass `--server <host:port>` to the
+engine (the CLI will expose this once the team lead's server is ready).
 
 See `docs/SURVEY.md` for the architecture discussion, `docs/PROTOCOL.md` for
 the packet/memory details, and `docs/API.md` for the engine/CLI API.

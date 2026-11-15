@@ -20,6 +20,7 @@ pub struct EngineOptions {
     pub emit_hz: u32,
     pub asset_dir: Option<PathBuf>,
     pub debug: bool,
+    pub gamepad: bool,
 }
 
 impl EngineOptions {
@@ -34,6 +35,7 @@ impl EngineOptions {
             emit_hz: 10,
             asset_dir: None,
             debug: false,
+            gamepad: true,
         }
     }
 }
@@ -41,6 +43,10 @@ impl EngineOptions {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Robot {
     pub name: String,
+    #[serde(default)]
+    pub is_me: bool,
+    #[serde(default)]
+    pub alliance: String,
     pub x: f32,
     pub y: f32,
     pub z: f32,
@@ -68,6 +74,10 @@ pub struct Fuel {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GameState {
     pub seq: u64,
+    #[serde(default)]
+    pub me: Option<Robot>,
+    #[serde(default)]
+    pub fuel_count: Option<u16>,
     pub t: f64,
     pub phase: String,
     #[serde(default)]
@@ -141,6 +151,9 @@ impl Engine {
         }
         if opts.debug {
             cmd.arg("--debug");
+        }
+        if opts.gamepad {
+            cmd.arg("--gamepad");
         }
         cmd.arg("--emit-hz").arg(opts.emit_hz.to_string());
         if let Some(dir) = &opts.asset_dir {
