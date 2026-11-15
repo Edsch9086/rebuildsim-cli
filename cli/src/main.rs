@@ -63,7 +63,7 @@ USAGE:
 OPTIONS:
   --code <CODE>       join an existing lobby by code
   --username <NAME>   display name (default: Bot)
-  --spawnpoint <S>    requested spawn point (e.g. red1, blue2)
+  --spawnpoint <S>    reserved; currently ignored (infer spawn from pose)
   --create            create a lobby instead of joining
   --start             start the match when host
   --emit-hz <N>       state rate from the engine (default: 10)
@@ -117,22 +117,24 @@ fn parse_args() -> Result<Args, String> {
 }
 
 fn print_state(state: &GameState, username: &str) {
-    let me = find_me(state, username);
+    let me = state.me.as_ref().or_else(|| find_me(state, username));
     let me_s = match me {
         Some(r) => format!(
-            "me=({:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2})",
-            r.x, r.y, r.heading, r.vx, r.vy
+            "me={}({}:{:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2})",
+            r.name, r.alliance, r.x, r.y, r.heading, r.vx, r.vy
         ),
         None => "me=?".to_string(),
     };
     let time = state.time.map(|t| format!("{t:.1}s")).unwrap_or_else(|| "?".to_string());
+    let fuel_count = state.fuel_count.unwrap_or(0);
     println!(
-        "state #{:<5} phase={:<6} time={:<7} robots={:<2} fuel={:<3} {}",
+        "state #{:<5} phase={:<9} time={:<7} robots={:<2} fuel={}/{} {}",
         state.seq,
         state.phase,
         time,
         state.robots.len(),
         state.fuel.len(),
+        fuel_count,
         me_s
     );
 }
