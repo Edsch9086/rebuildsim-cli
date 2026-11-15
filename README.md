@@ -47,6 +47,8 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
 | Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
+| Local server (`--server`) | ✅ connects to a local WS listener |
+| Fuel rule (`--fuel`) | ✅ host UI flow; 25% → 150 fuel validated |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)

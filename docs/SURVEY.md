@@ -130,7 +130,8 @@ u16 z              // bottom; add ~0.045 m for the centre
 The engine locates the array by taking a recent packet record, searching memory
 for its `x,y` pair, deriving `base = hit - 1 - id*7`, and verifying several
 packet records against that base. This survives both a changing fuel count and
-heap reallocation. If fewer than four records are available it falls back to a
+heap reallocation. Validated: a 25% fuel rule produced **150 fuel** and the
+locator found a new base with `fuel_count=150`; the default build produced 456. If fewer than four records are available it falls back to a
 run scan for `count <= 2048`. The engine emits `fuel_count` and all `count`
 records (with `present`), and merges the packet's velocities/flags when available.
 For 4,000+ fuel the JSON state is large; a compact/binary fuel channel is a
@@ -323,7 +324,12 @@ debugging oracle.
 
 ## 8. Multiplayer and ML training
 
-- One engine per bot; each bot needs its own wasm instance and WebSocket.
+- `--server <host:port>` was validated against a local WebSocket listener: the
+  engine connects to `ws://host/port/ws` and sends the normal hello. The team
+  lead's local server must speak the same protocol/build.
+- One engine per bot; each bot needs its own wasm instance and WebSocket. The
+  client opens a room-list socket and a room socket at startup; on the public
+  server this counts against the per-IP limit.
 - Six bots = six Node processes (~1 GB RSS, ~1 core total). Acceptable on a
   small server, not on a laptop with other work.
 - The public server has a **per-IP connection limit** and rate limiting. In our
