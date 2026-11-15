@@ -160,7 +160,11 @@ demo the same struct moved smoothly to `x=-0.11, y=3.40` with finite-difference
 velocities ~4.5 m/s. This is the **live simulation pose**, not a server keyframe.
 Earlier confusion about a lagging "server-acked" copy came from sending driver
 input during the 3-second pre-match countdown; once the countdown ends the pose
-is live in both auto and teleop.
+is live in both auto and teleop. The copy updates at **~15 Hz**, however: at a
+30 Hz state rate consecutive frames can be identical. The renderer interpolates
+at 60 fps; a higher-rate predicted/render pose is still the main open item for
+tight closed-loop control. The engine computes velocities from the last changed
+pose and repeats them across unchanged frames.
 
 The engine emits a top-level `me` object and an `is_me` flag on every robot,
 matched by the CLI username. This avoids the six-robot "which one is mine"
@@ -175,9 +179,10 @@ field coordinates. The driver input axes are in the driver's control frame (the
 game handles the red/blue side); a bot planning in global coordinates must use
 `alliance` when converting. This is called out in `docs/API.md`.
 
-Robot linear/angular velocities are finite differences of the live pose. At
-10–30 Hz they are smooth and match the motion; a direct velocity field may exist
-in the player struct at +0x27/+0x2b/+0x2f but we have not needed it.
+Robot linear/angular velocities are finite differences of the live pose. The
+pose updates at ~15 Hz, so a 10 Hz state rate is usually enough; higher rates
+repeat the last velocity. A direct velocity field may exist in the player struct
+at +0x27/+0x2b/+0x2f but we have not needed it.
 
 ### 4.3 Match/room state
 
@@ -368,10 +373,11 @@ visible anti-automation check. Treat this as a community service:
 | Headless engine boot + no-op GL | 1–2 days (done in this survey) |
 | Join/create/ready/start flow | 1–2 days (mostly done) |
 | Fuel extraction | 1 day (done) |
-| Live robot pose, velocities, `me` identity | 1–2 days (done) |
+| Live robot pose, velocities, `me` identity | 1–2 days (done; ~15 Hz feedback) |
 | Dynamic fuel count + base locator | 1 day (done) |
 | Virtual gamepad (axes + intake/outtake/shoot) | 1–2 days (done) |
 | 6-bot identity/alliance verification | 2–3 days |
+| Higher-rate render/predicted pose | 3–7 days (open) |
 | Rust CLI + JSON API + docs | 3–5 days (mostly done) |
 | Version/build handling + local server | 1–2 days |
 | Spawnpoint selection (deferred) | 1–2 days |
@@ -379,10 +385,11 @@ visible anti-automation check. Treat this as a community service:
 | Pure Rust Wasmtime engine (Phase 2) | 1–3 weeks |
 | Pure Rust physics reimplementation | months, not recommended |
 
-The networking, lobby automation, live pose, fuel, and gamepad actions are
-solved. The remaining work is **multi-bot validation** (six robots, red/blue
-alliance frames, making sure each CLI instance controls exactly its own robot)
-and **version drift** (memory signatures/protocol after a game update).
+The networking, lobby automation, fuel, gamepad actions, and 15 Hz player-state
+pose are solved. The remaining work is **multi-bot validation** (six robots,
+red/blue alliance frames, making sure each CLI instance controls exactly its own
+robot), a **higher-rate render/predicted pose** for tight control, and
+**version drift** (memory signatures/protocol after a game update).
 
 ## 11. Recommended next steps
 

@@ -119,8 +119,10 @@ The raw `pad` command is for diagnostics; normal bot code should use `input`.
 - `alliance` is a heuristic until `0x06` seat decoding is finished.
 - Six-robot identity/team validation is the next milestone; `me`/`is_me` is the
   primary safety mechanism.
-- Robot velocities are finite differences of the live pose. They are smooth at
-  10–30 Hz; use a higher `emit_hz` if you need finer resolution.
+- The player-state pose updates at ~15 Hz. A 10 Hz `emit_hz` is enough; 30 Hz
+  will repeat poses. Velocities are computed from the last changed pose and
+  repeated across unchanged frames. A higher-rate render/predicted pose is the
+  next control-quality improvement.
 - The engine is Node + wasm. A native Wasmtime engine is the Phase 2
   optimization; the JSON API is designed to survive that swap.
 - Point at a locally hosted server with `--server <host:port>`; the engine sets
