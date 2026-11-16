@@ -400,8 +400,11 @@ function handleServerFrame(buf) {
       emit({ type: 'error', error: 'protocol_mismatch', server: buf[2], expected: 1 });
       process.exit(4);
     }
-    protocolVersion = buf.length >= 3 ? buf[2] : null;
-    emit({ type: 'protocol', version: protocolVersion });
+    const v = buf.length >= 3 ? buf[2] : null;
+    if (v !== protocolVersion) {
+      protocolVersion = v;
+      emit({ type: 'protocol', version: protocolVersion });
+    }
   } else if (type === 0x42) {
     parseFuelPacket(buf);
   }
