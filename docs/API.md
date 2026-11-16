@@ -25,6 +25,47 @@ while let Some(state) = engine.next_state()? {
 }
 ```
 
+## Units and conventions
+
+| Field | Unit / convention |
+| --- | --- |
+| `seq` | integer state/frame counter |
+| `t` | Unix wall-clock seconds |
+| `time`, `time_remaining` | seconds on the `0x41` match clock (starts at 163.0, counts down) |
+| `substage_remaining` | seconds until the next substage boundary |
+| `x`, `y` | meters, global field coordinates |
+| `z` | meters above the field surface; robot chassis is ~0 at floor level |
+| `heading` | radians in the global field frame |
+| `vx`, `vy`, `vz` | meters/second |
+| `yaw_rate` | radians/second |
+| `fuel_count` | number of fuel records (pieces/clusters) in this match |
+| `fuel.id` | zero-based fuel array index, `0..fuel_count-1` |
+| `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
+| `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
+| `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
+| `red_score`, `blue_score`, `auto_*` | game points as displayed on the HUD (integer) |
+| `Input.x` | left stick X, normalized `-1.0..1.0` (right positive) |
+| `Input.y` | left stick Y, normalized `-1.0..1.0` (forward positive) |
+| `Input.rotate` | right stick X, normalized `-1.0..1.0` |
+| `Input.intake/outtake/shoot` | boolean triggers |
+| `emit_hz` | states per second |
+| `protocol` | server protocol version integer (`1` currently) |
+| `team_flag` | seat team enum: `0` red, `1` blue |
+| `seat` | zero-based room seat index |
+
+Notes:
+
+- Positions are **global field coordinates**. The game renders and controls each
+  driver in their alliance frame; use `field_to_driver()` when converting a
+  global vector into `Input`.
+- `heading` uses the game's heading convention, not a compass bearing. Prefer
+  `alliance_heading()` for alliance-relative logic.
+- `z` is the pose height, not a full 3D center of mass. Robot `z` is normally
+  near zero on the field. Fuel `z` is the stored bottom plus the 0.045 m radius.
+- `time` is match time, not wall time. Wall time is `t`.
+- The match clock is authoritative for substage transitions; see the table
+  below.
+
 ### `GameState`
 
 ```rust
