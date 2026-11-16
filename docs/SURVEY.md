@@ -214,9 +214,10 @@ established the structure (clock 163.0 → 0.0):
 | 55 → 30 | SHIFT 4 | 25 s |
 | 30 → 0 | ENDGAME | 30 s |
 
-The first ~3 s of auto are the robot spawn delay; driver input is allowed for
-the rest of auto and all of teleop. Field reset is non-interactive. The engine
-reports `phase` (countdown/auto/teleop/end) and the detailed `substage`.
+Driver input is live as soon as the match clock starts (163.0) and stays live
+through auto and teleop; the 3-second pre-match countdown happens before
+`match_start`/the clock. Field reset (143→140) is a 3-second reset window. The
+engine reports `phase` (countdown/auto/teleop/end) and the detailed `substage`.
 
 Scores are u16 fields in `0x41`: red total at `+14`, blue total at `+16`, red
 auto at `+18`, blue auto at `+28`. This was verified against the HUD in the same

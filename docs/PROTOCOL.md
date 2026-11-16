@@ -170,8 +170,9 @@ The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
   Example: during auto the HUD showed RED 1 / BLUE 2 and the packet had
   `14=1, 16=2`; after teleop scoring it showed RED 2 / BLUE 3 with
   `14=2, 16=3`, while `+18/+28` stayed at the auto values.
-- Driver input works during auto; the first ~3 s of auto are the spawn delay
-  before robots respond. The field reset at 143→140 is non-interactive.
+- Driver input works during auto as soon as the clock starts. The 3-second
+  countdown is before the match clock; the field reset at 143→140 is a 3-second
+  reset window.
 - The rest is settings, seat/robot state. The packet grows when
   spectators/players join (154 → 224/228 → 340 bytes).
 - This is **not** robot pose state.
@@ -290,10 +291,10 @@ There are many copies (room UI, telemetry, replay, network). Two copies matter:
   `1.0` signature, updates at **~48 Hz**. The engine prefers this copy
   (`pose_source: "predicted"`) and falls back to the acked copy.
 
-The earlier "lag" was input sent during the 3-second countdown. The engine
-exposes `me`/`is_me` by username. Alliance is a first-sight spawn-x heuristic
-(`x<0` red, `x>0` blue) until the `0x06` seat layout is decoded; poses are global
-field coordinates. See `SURVEY.md` §4.2.
+The earlier "lag" was input sent before the match clock started. The engine
+exposes `me`/`is_me` by username. Alliance comes from the `0x06` seat team flag
+(`alliance_source: "room"`); the spawn-x heuristic is only a fallback. Poses are
+global field coordinates. See `SURVEY.md` §4.2.
 
 ### 2.3 Match/room state in memory
 

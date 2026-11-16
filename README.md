@@ -23,8 +23,8 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
   Chromium, no Playwright, no GPU. Measured ~19% of one core and ~180 MB RSS.
 - We can drive the real client's UI in the headless engine (create/join by code,
   ready, start) and read the live fuel array + player pose structs out of wasm memory.
-  The player-state pose updates live; driver input works during auto (after the
-  3-second countdown).
+  The player-state pose updates live; driver input works during auto as soon as
+  the match clock starts (the 3-second countdown is before the match).
 - The practical architecture is **Rust CLI + headless wasm engine sidecar**. A pure
   Rust native client would require reimplementing the whole physics sim; not worth it.
 - The remaining risks are robot identity in a 6-bot lobby (we expose `me` / `is_me`),

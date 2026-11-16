@@ -95,8 +95,8 @@ from the server packet. The array length is `fuel_count`, not a fixed 456.
 - `intake` LT, `outtake` LB, `shoot` RT
 
 `shoot` is a trigger. The game auto-aims turreted robots and auto-turns dumper
-robots; do not synthesize an aim angle. Driver input works during **auto**; the
-first ~3 s of auto are the spawn delay. `field_reset` is non-interactive.
+robots; do not synthesize an aim angle. Driver input works during **auto** as
+soon as the match clock starts; `field_reset` is the 3-second reset window.
 
 ### Identity and alliance
 

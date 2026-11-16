@@ -127,7 +127,7 @@ and a Chromium binary; see the header comment.
 
 ## Known limitations
 
-- Driver input works during **auto**; the first ~3 s are the spawn delay.
+- Driver input works during **auto** as soon as the match clock starts.
   `phase` is `countdown`/`auto`/`teleop`/`end`; `substage` adds
   `field_reset`/`transition`/`shift1`..`shift4`/`endgame`.
 - Robot pose prefers the render-region **predicted copy** (~48 Hz) and falls
