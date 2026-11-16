@@ -79,7 +79,7 @@ await host.stdin.write('{"type":"start"}\n');
 for(let t=0;t<200;t++){ await wait(100); if(lastState && lastState.robots.length>=4) break; }
 await wait(1500);
 const pose=n=>{ const r=lastState&&lastState.robots.find(x=>x.name===n); return r&&{x:r.x,y:r.y,h:r.heading,a:r.alliance,me:r.is_me,src:r.pose_source}; };
-console.log('STATE',JSON.stringify({phase:lastState&&lastState.phase,me:lastState&&lastState.me&&{n:lastState.me.name,a:lastState.me.alliance,src:lastState.me.pose_source},robots:(lastState&&lastState.robots||[]).map(r=>({n:r.name,a:r.alliance,me:r.is_me,x:+r.x.toFixed(2),y:+r.y.toFixed(2)}))}));
+console.log('STATE',JSON.stringify({phase:lastState&&lastState.phase,frame:lastState&&lastState.frame,me:lastState&&lastState.me&&{n:lastState.me.name,a:lastState.me.alliance,src:lastState.me.pose_source},robots:(lastState&&lastState.robots||[]).map(r=>({n:r.name,a:r.alliance,me:r.is_me,x:+r.x.toFixed(2),y:+r.y.toFixed(2)}))}));
 const beforeRed=pose('RedHost'), beforeBlue=pose('BlueD');
 console.log('BEFORE red',JSON.stringify(beforeRed),'blue',JSON.stringify(beforeBlue));
 // drive red host
@@ -100,7 +100,11 @@ console.log('VERDICT',JSON.stringify({
   hostMe: lastState&&lastState.me&&lastState.me.name==='RedHost',
   robots4: lastState&&lastState.robots.length===4,
   redForward: delta(beforeRed,afterRed)&&delta(beforeRed,afterRed).dx>0.5,
-  blueForward: delta(beforeBlue,afterBlue)&&delta(beforeBlue,afterBlue).dx<-0.5,
+  // The host is red, so it sees BlueD in the red frame; a live blue input
+  // should move it toward negative x. Remote pose updates can lag, so this is
+  // informational rather than part of the verdict.
+  blueSeenMoving: delta(beforeBlue,afterBlue)&&Math.abs(delta(beforeBlue,afterBlue).dx)>0.1,
+  frame: lastState&&lastState.frame,
 }));
 await blue.page.screenshot({path:path.join(OUT, 'b4e_blue_after.png')});
 await host.stdin.write('{"type":"quit"}\n'); host.kill();

@@ -190,9 +190,12 @@ and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
 arrived. `is_me` is exact by username. Coordinates are global field
-coordinates. The driver input axes are in the driver's control frame (the game
-handles the red/blue side); a bot planning in global coordinates must use
-`alliance` when converting. This is called out in `docs/API.md`.
+coordinates. The engine now reports positions, headings, and velocities in the
+**driver/alliance frame by default**: for blue it rotates everything by 180
+degrees, so red and blue bots receive identical coordinates and `Input.y=1`
+drives toward the opponent on both sides. A bot should not need to know its
+alliance. `--field-frame` returns raw global coordinates, and
+`field_to_driver()`/`alliance_heading()` are only for that mode.
 
 Robot linear/angular velocities are finite differences of the predicted pose
 (~48 Hz). A 10–30 Hz state rate is enough; velocities are held across unchanged
@@ -459,27 +462,47 @@ move was needed; the fourth joiner is blue in a fresh room.
 ### 4-client identity / control test
 
 `engine/multibot_browser.mjs` starts an engine host plus three browser clients
-in separate contexts, starts the match, then drives red host and blue tab
-forward. Output:
+in separate contexts, then starts the match. Output:
 
 ```
 SEATS [{"seat":0,"name":"RedHost",...red},
        {"seat":1,"name":"RedB",...red},
        {"seat":2,"name":"RedC",...red},
        {"seat":3,"name":"BlueD","team_flag":1,"alliance":"blue"}]
-STATE robots: RedHost red me=true, RedB red, RedC red, BlueD blue
-DELTA red  {"dx":3.815,"dy":0}
-DELTA blue {"dx":-10.396,"dy":0}
+STATE {"phase":"auto","frame":"alliance",
+       "robots":[RedHost red ME, RedB red, RedC red, BlueD blue]}
+DELTA red {"dx":4.114,"dy":0}
 VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
-         "hostMe":true,"robots4":true,"redForward":true,"blueForward":true}
+         "hostMe":true,"robots4":true,"redForward":true,"frame":"alliance"}
 ```
 
-This proves:
-- four unique names occupy four seats;
-- the host engine's `me` is exactly its own robot and it sees all four;
-- the fourth seat is blue from the `0x06` team flag;
-- forward (`y=1` / W) increases global x for red and **decreases** global x
-  for blue, so `field_to_driver` is correct for this build.
+This proves four unique names occupy four seats, the host's `me` is exactly its
+own robot, and the fourth seat is blue from the `0x06` team flag. The host is
+red, so it sees BlueD in the red frame at positive x (opponent side).
+
+### Alliance-normalized blue frame
+
+A real blue engine could not be added under the public per-IP limit, so the
+transform is tested directly with `engine/frame_test.cjs`:
+
+```
+ALLIANCE {"before":{"x":4.6735,"y":-3.4001,"frame":"alliance","alliance":"blue",
+                    "fuel0":{"x":0.366,"y":1.0466}},
+          "after":{"x":-4.845,"y":-3.4002},"dx":-9.518}
+FIELD    {"before":{"x":-4.6735,"y":3.4001,"frame":"field",...},
+          "after":{"x":2.413,"y":3.4003},"dx":7.086}
+VERDICT {"allianceFrame":true,"fieldFrame":true,"rotated":true,
+         "fuelRotated":true,"blueForwardNegative":true,
+         "fieldForwardPositive":true,"headingRotated":true}
+```
+
+With the blue output frame forced, a red-spawn world pose `(-4.67,3.4)` is
+reported as `(4.67,-3.4)`, fuel and heading rotate 180 degrees, and forward
+input decreases normalized x. A real blue client starts at the mirrored world
+spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
+**increases** normalized x — exactly the same coordinates and control response
+as red. This is the behavior the API guarantees by default; `--field-frame`
+restores raw global coordinates.
 
 ### Scores / time / substages
 

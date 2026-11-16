@@ -33,9 +33,9 @@ while let Some(state) = engine.next_state()? {
 | `t` | Unix wall-clock seconds |
 | `time`, `time_remaining` | seconds on the `0x41` match clock (starts at 163.0, counts down) |
 | `substage_remaining` | seconds until the next substage boundary |
-| `x`, `y` | meters, global field coordinates |
+| `x`, `y` | meters in `state.frame` (alliance-normalized by default) |
 | `z` | meters above the field surface; robot chassis is ~0 at floor level |
-| `heading` | radians in the global field frame |
+| `heading` | radians in `state.frame` |
 | `vx`, `vy`, `vz` | meters/second |
 | `yaw_rate` | radians/second |
 | `fuel_count` | number of fuel records (pieces/clusters) in this match |
@@ -55,11 +55,16 @@ while let Some(state) = engine.next_state()? {
 
 Notes:
 
-- Positions are **global field coordinates**. The game renders and controls each
-  driver in their alliance frame; use `field_to_driver()` when converting a
-  global vector into `Input`.
-- `heading` uses the game's heading convention, not a compass bearing. Prefer
-  `alliance_heading()` for alliance-relative logic.
+- **Coordinates are alliance-normalized by default** (`state.frame ==
+  "alliance"`). For blue, the engine rotates every robot/fuel position, heading,
+  and velocity by 180 degrees before reporting it. Red and blue bots therefore
+  receive the same convention: own side is negative x, opponent side is
+  positive x, and `Input.y = 1` drives toward the opponent on both sides. A bot
+  should not need `alliance` at all.
+- `--field-frame` switches to raw global coordinates (`frame == "field"`). In
+  that mode use `Robot::field_to_driver()` / `alliance_heading()` before feeding
+  a global vector into `Input`.
+- `heading` uses the game's heading convention, not a compass bearing.
 - `z` is the pose height, not a full 3D center of mass. Robot `z` is normally
   near zero on the field. Fuel `z` is the stored bottom plus the 0.045 m radius.
 - `time` is match time, not wall time. Wall time is `t`.
@@ -83,6 +88,8 @@ pub struct GameState {
     pub auto_red_score: u16,  // frozen at the end of auto
     pub auto_blue_score: u16,
     pub protocol: Option<u8>,
+    pub frame: String,        // "alliance" (default) | "field"
+    pub alliance: String,     // diagnostic only; bots should not need it
     pub me: Option<Robot>,    // the robot owned by this CLI instance
     pub robots: Vec<Robot>,
     pub fuel: Vec<Fuel>,
@@ -113,11 +120,11 @@ scores freeze when auto ends.
 pub struct Robot {
     pub name: String,
     pub is_me: bool,
-    pub alliance: String,     // "red" | "blue"
+    pub alliance: String,     // diagnostic only
     pub alliance_source: String, // "room" (0x06 seats) | "spawn"
-    pub x: f32, pub y: f32, pub z: f32,
-    pub heading: f32,         // radians
-    pub vx: f32, pub vy: f32, pub vz: f32,
+    pub x: f32, pub y: f32, pub z: f32, // in state.frame
+    pub heading: f32,         // radians, in state.frame
+    pub vx: f32, pub vy: f32, pub vz: f32, // m/s, in state.frame
     pub yaw_rate: f32,
     pub pose_source: String,  // "predicted" (render copy, ~48 Hz) | "acked"
 }
@@ -141,23 +148,26 @@ soon as the match clock starts; `field_reset` is the 3-second reset window.
 
 ### Identity and alliance
 
-`state.me`, `Robot.is_me`, and `alliance_source: "room"` are authoritative.
-`me` is matched against the CLI username in the live player state; alliance
-comes from the `0x06` seat record. In a six-robot lobby, always read `me`
-rather than indexing `robots[0]` or guessing by team.
+`state.me` and `Robot.is_me` are authoritative. `me` is matched against the CLI
+username in the live player state; alliance comes from the `0x06` seat record.
+In a six-robot lobby, always read `me` rather than indexing `robots[0]` or
+guessing by team.
 
-Global poses are field coordinates. The driver input axes are in the driver
-control frame; the game handles the red/blue side. Use the helpers:
+With the default `frame == "alliance"`, the engine has already rotated
+positions/headings/velocities into your driver frame. Just plan in the reported
+coordinates:
 
 ```rust
-let (dx, dy) = me.field_to_driver(global_x - me.x, global_y - me.y);
-engine.send_input(&Input { x: dx, y: dy, ..Default::default() })?;
+let dx = target_x - me.x;
+let dy = target_y - me.y;
+engine.send_input(&Input { x: strafe, y: forward, ..Default::default() })?;
 ```
 
-`field_to_driver` rotates 180° for blue; `alliance_heading` does the same for a
-heading. This is validated for red; blue is the expected inversion and should
-be re-checked whenever the game changes. The 4-player seat test showed seat 4
-as blue (`team=1`), so a fourth bot in a fresh lobby is blue without moving.
+`Robot::field_to_driver()` and `alliance_heading()` exist for
+`--field-frame`/raw-global consumers only; do not call them in alliance frame.
+The 4-player seat test showed seat 4 as blue (`team=1`), so a fourth bot in a
+fresh room is blue without moving. In a 3v3, the first three joiners are red and
+the next three blue.
 
 ## Engine JSON lines (stdio, default)
 

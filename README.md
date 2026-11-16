@@ -38,11 +38,12 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Headless wasm boot in Node | ✅ works |
 | Live server handshake + room list | ✅ works |
 | Create room / join room by code | ✅ works |
-| Ready / start match | ✅ works (host auto-ready + start; joiner ready) |
+| Ready / start match | ✅ joiner auto-ready; test host can start |
 | Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
 | Robot identity | ✅ `me` + `is_me` by username |
+| Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); seat 4 blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
 | Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
@@ -64,17 +65,20 @@ node headless.cjs --code <LOBBY> --username MyBot
 ```
 
 The engine prints JSON lines on stdout and accepts JSON commands on stdin.
-Use `--create` to make a room, and `--start` to start it as host. `--binary`
-switches to framed stdout with packed fuel records (the Rust CLI uses this by
-default). `--expect-build <hash>` pins the downloaded build; startup fails with
-exit 3 if the live server build differs.
+Normal bots only join (`--code`); a human host starts the match. `--create` /
+`--start` remain for local testing. `--binary` switches to framed stdout with
+packed fuel records (the Rust CLI uses this by default). `--expect-build <hash>`
+pins the downloaded build; startup fails with exit 3 if the live server build
+differs.
 
 Rust CLI (from the repo root):
 
 ```bash
+# normal operation: a human hosts, the bot joins and readies itself
 cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot
 # use --keyboard for digital controls instead of the virtual gamepad
-# create/start a private room and run the axis diagnostic:
+
+# test-only: create/start a private room and run the axis diagnostic
 cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --demo
 ```
 

@@ -293,8 +293,10 @@ There are many copies (room UI, telemetry, replay, network). Two copies matter:
 
 The earlier "lag" was input sent before the match clock started. The engine
 exposes `me`/`is_me` by username. Alliance comes from the `0x06` seat team flag
-(`alliance_source: "room"`); the spawn-x heuristic is only a fallback. Poses are
-global field coordinates. See `SURVEY.md` §4.2.
+(`alliance_source: "room"`); the spawn-x heuristic is only a fallback. Poses in
+the raw memory/packets are global field coordinates; the engine rotates them
+into the driver/alliance frame by default (`--field-frame` keeps raw global).
+See `SURVEY.md` §4.2.
 
 ### 2.3 Match/room state in memory
 

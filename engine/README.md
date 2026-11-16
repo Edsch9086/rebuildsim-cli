@@ -22,16 +22,17 @@ not committed to this repo.
 
 ## Run
 
-Create and start a private room:
+Normal operation is **join-only**: a human spectator hosts the private room,
+bots join and ready themselves, and the human starts the match.
+
+```bash
+node headless.cjs --code <LOBBY> --username TestBot --emit-hz 10
+```
+
+For local testing you can create/start a room from the engine:
 
 ```bash
 node headless.cjs --create --start --username TestBot --emit-hz 10
-```
-
-Join by code:
-
-```bash
-node headless.cjs --code <LOBBY> --username TestBot
 ```
 
 Flags:
@@ -46,6 +47,8 @@ Flags:
 --gamepad           use the virtual gamepad (analog + action buttons)
 --fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/...)
 --binary            framed stdout: JSON + packed fuel records
+--field-frame       raw global coordinates (default: alliance-normalized)
+--frame-alliance R|B  diagnostic override for the output frame (testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
 --no-build-check    skip the live BUILD fetch (offline debugging)
 --emit-hz <N>       state rate (1..60, default 10)
@@ -71,7 +74,7 @@ stdout is JSON lines only:
 {"type":"state","seq":0,"t":...,"phase":"auto","substage":"auto","time":158.0,
  "time_remaining":158.0,"substage_remaining":15.0,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
- "fuel_count":456,
+ "frame":"alliance","alliance":"red","fuel_count":456,
  "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.4,
        "z":0,"heading":-1.18,"vx":0,"vy":0,"vz":0,"yawRate":0},
@@ -114,12 +117,15 @@ fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
 
 ```bash
 node room06_test.cjs
+node frame_test.cjs
 RB_ASSET_DIR=engine/cache node binary_test.cjs
 ```
 
 `room06_test.cjs` parses a synthetic 4-seat packet and the captured live packet
-(seats 0–2 red, seat 3 blue). `binary_test.cjs` creates a 25% fuel room and
-checks the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
+(seats 0–2 red, seat 3 blue). `frame_test.cjs` forces the blue output frame and
+checks that poses/fuel/heading rotate 180 degrees and that forward input reverses
+in normalized coordinates. `binary_test.cjs` creates a 25% fuel room and checks
+the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
 
 `multibot_browser.mjs` is the optional 4-client identity/control test (engine
 host + three browser clients in separate contexts). It needs `playwright-core`
@@ -134,9 +140,16 @@ and a Chromium binary; see the header comment.
   back to the ~15 Hz player copy; `pose_source` says which. `me`/`is_me`
   identify this CLI's robot. Alliance comes from the `0x06` seat team flag
   (`alliance_source: "room"`); the spawn-x heuristic is only a fallback.
+- Positions/headings/velocities are **alliance-normalized by default**: blue
+  gets the same 180-degree-rotated frame as red, so identical bot logic works
+  on both sides and `alliance` is diagnostic only. `--field-frame` returns raw
+  global coordinates.
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
 - `--spawn` is deferred; infer the spawn from `me`.
+- The CLI is normally a **joiner**: a human spectator hosts, bots join and
+  auto-ready, and the human starts the match. `--create`/`--start` are for
+  testing only.
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
 - One engine = one wasm instance + one WebSocket. For multiple bots, spawn one

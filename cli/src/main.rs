@@ -32,6 +32,7 @@ struct Args {
     fuel: Option<String>,
     server: Option<String>,
     binary: bool,
+    field_frame: bool,
     expect_build: Option<String>,
     no_build_check: bool,
 }
@@ -54,6 +55,7 @@ impl Default for Args {
             fuel: None,
             server: None,
             binary: true,
+            field_frame: false,
             expect_build: None,
             no_build_check: false,
         }
@@ -72,8 +74,8 @@ OPTIONS:
   --code <CODE>       join an existing lobby by code
   --username <NAME>   display name (default: Bot)
   --spawnpoint <S>    reserved; currently ignored (infer spawn from pose)
-  --create            create a lobby instead of joining
-  --start             start the match when host
+  --create            test-only: create a lobby instead of joining
+  --start             test-only: auto-ready/start when hosting
   --emit-hz <N>       state rate from the engine (default: 10)
   --asset-dir <DIR>   directory containing index.js/index.wasm (default: engine/cache)
   --engine <PATH>     path to engine/headless.cjs
@@ -84,6 +86,7 @@ OPTIONS:
   --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, ...)
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
+  --field-frame       report raw global coordinates instead of alliance-normalized
   --expect-build <H>  fail fast unless the cached build hash matches H
   --no-build-check    skip the live server BUILD comparison
   -h, --help          show this help
@@ -114,6 +117,7 @@ fn parse_args() -> Result<Args, String> {
             "--fuel" => a.fuel = Some(it.next().ok_or("--fuel needs a value")?),
             "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
             "--json" => a.binary = false,
+            "--field-frame" => a.field_frame = true,
             "--expect-build" => {
                 a.expect_build = Some(it.next().ok_or("--expect-build needs a value")?)
             }
@@ -209,6 +213,7 @@ fn main() {
     opts.fuel = args.fuel.clone();
     opts.server = args.server.clone();
     opts.binary = args.binary;
+    opts.field_frame = args.field_frame;
     opts.expect_build = args.expect_build.clone();
     opts.no_build_check = args.no_build_check;
 

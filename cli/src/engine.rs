@@ -24,6 +24,7 @@ pub struct EngineOptions {
     pub fuel: Option<String>,
     pub server: Option<String>,
     pub binary: bool,
+    pub field_frame: bool,
     pub expect_build: Option<String>,
     pub no_build_check: bool,
 }
@@ -44,6 +45,7 @@ impl EngineOptions {
             fuel: None,
             server: None,
             binary: true,
+            field_frame: false,
             expect_build: None,
             no_build_check: false,
         }
@@ -154,6 +156,12 @@ pub struct GameState {
     /// Server protocol version from 0x21.
     #[serde(default)]
     pub protocol: Option<u8>,
+    /// "alliance" (default, identical for red and blue) or "field".
+    #[serde(default)]
+    pub frame: String,
+    /// Our alliance for diagnostics; bots should not need it in alliance frame.
+    #[serde(default)]
+    pub alliance: String,
     /// True when `fuel` was delivered on the binary channel (fuel is empty).
     #[serde(default)]
     pub fuel_bin: bool,
@@ -278,6 +286,9 @@ impl Engine {
         }
         if opts.binary {
             cmd.arg("--binary");
+        }
+        if opts.field_frame {
+            cmd.arg("--field-frame");
         }
         if let Some(build) = &opts.expect_build {
             cmd.arg("--expect-build").arg(build);

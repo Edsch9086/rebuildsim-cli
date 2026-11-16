@@ -249,6 +249,8 @@ const OPT = {
   server: getArg('server', ''),
   fuel: getArg('fuel', ''),
   binary: process.argv.includes('--binary'),
+  fieldFrame: process.argv.includes('--field-frame'),
+  frameAlliance: getArg('frame-alliance', ''),
   expectBuild: getArg('expect-build', ''),
   noBuildCheck: process.argv.includes('--no-build-check'),
 };
@@ -285,6 +287,7 @@ let roomSeats = [];
 let scores = { red: 0, blue: 0 };
 let autoScores = { red: 0, blue: 0 };
 let protocolVersion = null;
+let ourAllianceCache = null;
 
 function addPrintableNames(buf) {
   let run = '';
@@ -322,6 +325,7 @@ function applyRoom06(buf) {
   for (const seat of roomSeats) {
     allianceByName.set(seat.name, seat.alliance);
     allianceSourceByName.set(seat.name, 'room');
+    if (seat.name === OPT.username) ourAllianceCache = seat.alliance;
   }
   const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.alliance}`).join('|');
   if (key !== seatsKey) {
@@ -639,10 +643,12 @@ function readFuel() {
     const y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
     const z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
     const p = fuelPacket.get(i);
-    const item = { id: i, x: +x.toFixed(4), y: +y.toFixed(4), z: +z.toFixed(4), present };
+    const fp = allianceVec(x, y);
+    const item = { id: i, x: +fp.x.toFixed(4), y: +fp.y.toFixed(4), z: +z.toFixed(4), present };
     if (p) {
-      item.vx = +(((p.vx - 0x8000) / 4096)).toFixed(3);
-      item.vy = +(((p.vy - 0x8000) / 4096)).toFixed(3);
+      const fv = allianceVec((p.vx - 0x8000) / 4096, (p.vy - 0x8000) / 4096);
+      item.vx = +fv.x.toFixed(3);
+      item.vy = +fv.y.toFixed(3);
       item.vz = +(((p.vz - 0x8000) / 4096)).toFixed(3);
       item.count = p.count;
       item.flags = p.flags;
@@ -699,6 +705,41 @@ function findPose(name) {
 const lastPose = new Map();
 const allianceByName = new Map();
 const allianceSourceByName = new Map();
+
+function normalizeAngle(a) {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+function activeAlliance() {
+  if (OPT.frameAlliance === 'red' || OPT.frameAlliance === 'blue') return OPT.frameAlliance;
+  if (ourAllianceCache) return ourAllianceCache;
+  const p = findPose(OPT.username);
+  if (p) {
+    ourAllianceCache = p.x < 0 ? 'red' : 'blue';
+    allianceByName.set(OPT.username, ourAllianceCache);
+    allianceSourceByName.set(OPT.username, 'spawn');
+  }
+  return ourAllianceCache;
+}
+
+// Blue robots drive in a 180-degree-rotated control frame. By default the
+// engine reports every position/heading/velocity in that same alliance frame,
+// so identical bot logic works on both sides. --field-frame returns raw global
+// coordinates instead.
+function inAllianceFrame() {
+  return !OPT.fieldFrame && activeAlliance() === 'blue';
+}
+
+function allianceVec(x, y) {
+  return inAllianceFrame() ? { x: -x, y: -y } : { x, y };
+}
+
+function allianceHeading(h) {
+  return inAllianceFrame() ? normalizeAngle(h + Math.PI) : h;
+}
+
 function readRobots() {
   const out = [];
   for (const name of roomNames) {
@@ -709,11 +750,13 @@ function readRobots() {
       if (!prev || now - prev.t > 2) continue;
       // keep the last known pose for a frame instead of dropping a robot
       const alliance = allianceByName.get(name) || (prev.x < 0 ? 'red' : 'blue');
+      const sp = allianceVec(prev.x, prev.y);
       out.push({
         name, is_me: name === OPT.username, alliance,
         alliance_source: allianceSourceByName.get(name) || 'spawn', stale: true,
-        x: +prev.x.toFixed(4), y: +prev.y.toFixed(4), z: +prev.z.toFixed(4),
-        heading: +prev.heading.toFixed(4), vx: 0, vy: 0, vz: 0, yawRate: 0,
+        x: +sp.x.toFixed(4), y: +sp.y.toFixed(4), z: +prev.z.toFixed(4),
+        heading: +allianceHeading(prev.heading).toFixed(4),
+        vx: 0, vy: 0, vz: 0, yawRate: 0,
       });
       continue;
     }
@@ -736,12 +779,15 @@ function readRobots() {
       allianceByName.set(name, alliance);
       allianceSourceByName.set(name, 'spawn');
     }
+    const op = allianceVec(p.x, p.y);
+    const ov = allianceVec(vx, vy);
     out.push({
       name, is_me: name === OPT.username, alliance,
       alliance_source: allianceSourceByName.get(name) || 'spawn',
       pose_source: p.source || 'unknown',
-      x: +p.x.toFixed(4), y: +p.y.toFixed(4), z: +p.z.toFixed(4),
-      heading: +p.heading.toFixed(4), vx: +vx.toFixed(3), vy: +vy.toFixed(3),
+      x: +op.x.toFixed(4), y: +op.y.toFixed(4), z: +p.z.toFixed(4),
+      heading: +allianceHeading(p.heading).toFixed(4),
+      vx: +ov.x.toFixed(3), vy: +ov.y.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
     });
   }
@@ -1045,6 +1091,8 @@ setInterval(() => {
     auto_red_score: autoScores.red, auto_blue_score: autoScores.blue,
     scores: { red: scores.red, blue: scores.blue },
     protocol: protocolVersion,
+    frame: OPT.fieldFrame ? 'field' : 'alliance',
+    alliance: activeAlliance(),
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
