@@ -380,6 +380,24 @@ function substageRemaining(t, stage) {
   return end == null ? null : Math.max(0, t - end);
 }
 
+function onMatchStart() {
+  if (flow.match) return;
+  flow.match = true;
+  matchStarted = true;
+  poseCache.clear();
+  // Seat order does not change during a match; re-apply it if the room
+  // packet arrived before the match. Do not clear it (that would drop the
+  // only authoritative alliance source back to the spawn heuristic).
+  if (lastRoom06) applyRoom06(lastRoom06);
+  fuelAddr = 0;
+  lastMatchTime = null;
+  last41 = null;
+  scores = { red: 0, blue: 0 };
+  autoScores = { red: 0, blue: 0 };
+  emit({ type: 'match', phase: phaseFor(lastMatchTime), substage: substageFor(lastMatchTime),
+    time: lastMatchTime, seats: roomSeats });
+}
+
 function handleServerFrame(buf) {
   if (!buf || !buf.length) return;
   const type = buf[0];
@@ -893,10 +911,8 @@ function onTrack(name, params) {
     } else if (path === '/room' && !flow.joined) {
       flow.joined = true;
       emit({ type: 'room', code: roomCode, host, seated });
-    } else if (path === '/multi/match' && !flow.match) {
-      flow.match = true;
-      matchStarted = true;
-      emit({ type: 'match', phase: 'countdown', time: lastMatchTime });
+    } else if (path === '/multi/match') {
+      onMatchStart();
     }
   }
   if (name === 'name_prompt' && !flow.name) {
@@ -955,20 +971,8 @@ function onTrack(name, params) {
       readyAndStart();
     }
   }
-  if (name === 'match_start' && !flow.match) {
-    flow.match = true;
-    matchStarted = true;
-    poseCache.clear();
-    // Seat order does not change during a match; re-apply it if the room
-    // packet arrived before the match. Do not clear it (that would drop the
-    // only authoritative alliance source back to the spawn heuristic).
-    if (lastRoom06) applyRoom06(lastRoom06);
-    fuelAddr = 0;
-    lastMatchTime = null;
-    last41 = null;
-    scores = { red: 0, blue: 0 };
-    autoScores = { red: 0, blue: 0 };
-    emit({ type: 'match', phase: phaseFor(lastMatchTime), substage: substageFor(lastMatchTime), time: lastMatchTime, seats: roomSeats });
+  if (name === 'match_start') {
+    onMatchStart();
   }
 }
 
