@@ -311,14 +311,14 @@ if (OPT.server) {
 
 const wslog = [];
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
-let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null, roomSocketId = null;
+let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
-let startClicks = 0, resultsClickScheduled = false;
+let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
-let matchStartedAt = 0, shrinkKey = null;
+let matchStartedAt = 0, seatMissCount = 0, seatMissAt = 0;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -400,15 +400,18 @@ function resetMatchState() {
   startClicked = false;
   startClicks = 0;
   resultsClickScheduled = false;
+  resultsPending = false;
   lastReadyClickAt = 0;
+  seatsKey = '';
   matchWasActive = false;
   matchStartedAt = 0;
-  shrinkKey = null;
   for (const s of roomSeats) s.ready = null;
   lastRoomKey = '';
   if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
   if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
   seatMissingSince = 0;
+  seatMissCount = 0;
+  seatMissAt = 0;
   last41At = 0;
   fuelVerifyFails = 0;
   poseCache.clear();
@@ -433,6 +436,14 @@ function resetMatchState() {
   scores = { red: 0, blue: 0 };
   autoScores = { red: 0, blue: 0 };
   lastScoreKey = '';
+}
+
+function noteSeatMissingPacket() {
+  const now = Date.now();
+  if (!seatMissAt || now - seatMissAt > 2000) seatMissCount = 0;
+  seatMissAt = now;
+  seatMissCount++;
+  if (seatMissCount >= 2) noteSeatPresence(false);
 }
 
 function noteSeatPresence(ours) {
@@ -469,7 +480,6 @@ function noteSeatPresence(ours) {
 
 function clearRoomIdentity() {
   fuelApplied = false;
-  shrinkKey = null;
   roomSeats = [];
   roomNames = new Set();
   allianceByName.clear();
@@ -483,36 +493,36 @@ function applyRoom06(buf) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
     // A parse miss is not evidence that the seat is gone. Keep the last good
-    // list; only an explicit room-code change/leave clears identity.
+    // list but debounce the missing-seat path so repeated empty packets can
+    // demote/exit instead of leaving a zombie.
     log('room state parse produced no seats; keeping last good seat list');
+    if (flow.joined) noteSeatMissingPacket();
     return false;
   }
   if (roomSeats.length) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (oursBefore && !oursNow) {
-      // A partial/stale packet must not erase our identity. Keep the last good
-      // list; the debounced demotion timer decides whether this is real.
+      // Two consecutive omissions are required before starting the demotion
+      // timer; one partial packet must not kill a live match.
       log('room packet omits our seat; keeping last good seat list');
-      noteSeatPresence(false);
+      noteSeatMissingPacket();
       return false;
     }
-    if (parsed.seats.length < roomSeats.length) {
-      if (matchStarted) {
+    noteSeatPresence(true);
+    if (matchStarted) {
+      const byName = new Map(parsed.seats.map(s => [s.name, s]));
+      for (const old of roomSeats) {
+        const cur = byName.get(old.name);
+        if (!cur || cur.team_flag !== old.team_flag) {
+          log('room roster changed during a match; keeping last good seat list');
+          return false;
+        }
+      }
+      if (parsed.seats.length < roomSeats.length) {
         log('room state lost seats during a match; keeping last good seat list');
         return false;
       }
-      // Accept a genuine departure only after the same smaller snapshot is
-      // seen twice; a single partial parse must not shrink the seat list.
-      const key = parsed.seats.map(s => s.name).join(',');
-      if (shrinkKey !== key) {
-        shrinkKey = key;
-        log('room snapshot shrank; waiting for confirmation');
-        return false;
-      }
-      shrinkKey = null;
-    } else {
-      shrinkKey = null;
     }
   }
   roomSeats = parsed.seats;
@@ -551,14 +561,13 @@ function applyRoom06(buf) {
     const ours = roomSeats.some(s => s.name === OPT.username);
     if (matchStarted && seated && !ours) {
       log('seat missing during match; debouncing');
-      noteSeatPresence(false);
+      noteSeatMissingPacket();
       return false;
     }
     if (!ours) {
       noteSeatPresence(false);
       return false;
     }
-    noteSeatPresence(true);
     if (!seated || role !== 'driver') {
       seated = true;
       role = 'driver';
@@ -614,6 +623,7 @@ function onMatchStart() {
   matchWasActive = true;
   matchStartedAt = Date.now();
   startClicks = 0;
+  resultsPending = false;
   readyClicked = true;
   startClicked = true;
   // Seat order does not change during a match; re-apply it after the reset
@@ -713,18 +723,18 @@ globalThis.WebSocket = class extends NativeWS {
     this.addEventListener('open', () => {
       this.__rbOpened = true;
       wsOpen++;
-      if (id === 2 && !roomSocketId) roomSocketId = id;
       if (globalThis.__RB_DEBUG) log('WS open', id, url);
       emit({ type: 'ws', state: 'open', id, url });
     });
     this.addEventListener('close', (e) => {
-      if (this.__rbOpened) wsOpen = Math.max(0, wsOpen - 1);
-      wsClosed++;
-      const room = id === lastRoomWsId || id === roomSocketId;
+      if (this.__rbOpened) {
+        wsOpen = Math.max(0, wsOpen - 1);
+        wsClosed++;
+      }
+      const room = id === lastRoomWsId;
       log('WS close', id, e.code, e.reason, room ? '(room)' : '');
       emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason, url, room });
       if (id === lastRoomWsId) lastRoomWsId = null;
-      if (id === roomSocketId) roomSocketId = null;
     });
     this.addEventListener('error', () => {
       if (globalThis.__RB_DEBUG) log('WS error', id);
@@ -1010,12 +1020,15 @@ function findFuelArray() {
     fuelAddr = 0;
     fuelSource = null;
   }
-  if (fuelPacketCount < 4 && scanFuelRun()) return fuelAddr;
   if (fuelPacket.size) {
     const b = locateFuelFromPacket();
     if (b) return b;
   }
-  return scanFuelRun();
+  const scanned = scanFuelRun();
+  // A synchronous heap scan blocks 0x41 processing; treat the scan time as
+  // liveness so the next state tick does not falsely report a stalled clock.
+  last41At = Date.now();
+  return scanned;
 }
 
 function readFuel() {
@@ -1441,11 +1454,11 @@ function tapBox(index, x, y, text) {
   } catch (e) { log('text box error', String(e)); }
 }
 
-function readyIfNeeded() {
+function readyIfNeeded(force = false) {
   if (matchStarted || uiBusy) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
-  if (Date.now() - lastReadyClickAt < 4000) return;
+  if (!force && Date.now() - lastReadyClickAt < 4000) return;
   lastReadyClickAt = Date.now();
   readyClicked = true;
   uiLater(() => {
@@ -1471,10 +1484,7 @@ function clickStartWhenReady(attempt = 0, force = false) {
     startClicks++;
     if (startClicks < 3) {
       uiLater(() => {
-        if (!flow.match) {
-          startClicked = false;
-          clickStartWhenReady(0, force);
-        }
+        if (!flow.match) clickStartWhenReady(0, force);
       }, 5000);
     } else {
       uiLater(() => {
@@ -1482,6 +1492,7 @@ function clickStartWhenReady(attempt = 0, force = false) {
           log('start click not observed after retries');
           emit({ type: 'error', error: 'not_all_ready', detail: 'start not observed' });
           startClicked = false;
+          startClicks = 0;
         }
       }, 5000);
     }
@@ -1492,6 +1503,7 @@ function clickStartWhenReady(attempt = 0, force = false) {
     log('start blocked; seats not ready:', notReady.join(','));
     emit({ type: 'error', error: 'not_all_ready', detail: notReady.join(',') });
     startClicked = false;
+    startClicks = 0;
     return;
   }
   uiLater(() => clickStartWhenReady(attempt + 1, force), 500);
@@ -1551,7 +1563,10 @@ function onTrack(name, params) {
       } else if (matchLive && !roomResetTimer) {
         roomResetTimer = setTimeout(() => {
           roomResetTimer = null;
-          if (flow.match && (!last41At || Date.now() - last41At >= 1500)) {
+          const stillStarting = flow.match && !clockStarted && matchStartedAt
+            && Date.now() - matchStartedAt < 10000;
+          if (!stillStarting && flow.match
+              && (!last41At || Date.now() - last41At >= 1500)) {
             log('room screen without clock updates; resetting stale match');
             resetMatchState();
             emitRoom();
@@ -1618,9 +1633,8 @@ function onTrack(name, params) {
     };
     if (host && OPT.fuel && !fuelApplied) {
       fuelApplied = true;
-      // Room settings > Rules > Fuel count. 720p coordinates. The ready
-      // click scheduled above fires at 300 ms, before this dialog opens at
-      // 500 ms, so uiBusy is set there rather than here.
+      // Room settings > Rules > Fuel count. 720p coordinates. uiBusy starts
+      // when this dialog opens; readyIfNeeded(true) retries after fuel setup.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
       if (raw === 'max' || raw === 'full') { log('--fuel max is not supported; use an explicit percentage'); clicks = 0; }
@@ -1636,7 +1650,7 @@ function onTrack(name, params) {
         uiLater(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
       }
       uiLater(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
-      uiLater(() => { uiBusy = false; readyIfNeeded(); readyAndStart(); }, 1500 + clicks * 250 + 1000);
+      uiLater(() => { uiBusy = false; readyIfNeeded(true); readyAndStart(); }, 1500 + clicks * 250 + 1000);
       log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
     } else {
       readyAndStart();
@@ -1797,18 +1811,19 @@ setInterval(() => {
     if (flow.joined) emitRoom();
     if (!resultsClickScheduled) {
       resultsClickScheduled = true;
+      resultsPending = true;
       // Results screen: BACK TO THE ROOM is centered at (365, 688).
       uiLater(() => {
-        if (!flow.match) { log('results: back to room'); globalThis.__ctl.click(365, 688); }
+        if (resultsPending) { log('results: back to room'); globalThis.__ctl.click(365, 688); }
       }, 3500);
       uiLater(() => {
-        if (!flow.match) { log('results: retry back to room'); globalThis.__ctl.click(365, 688); }
+        if (resultsPending) { log('results: retry back to room'); globalThis.__ctl.click(365, 688); }
       }, 7500);
       uiLater(() => {
-        if (!flow.match) { log('results: final back to room'); globalThis.__ctl.click(365, 688); }
+        if (resultsPending) { log('results: final back to room'); globalThis.__ctl.click(365, 688); }
       }, 15000);
       uiLater(() => {
-        if (!flow.match) {
+        if (resultsPending) {
           log('results screen did not return to the room; exiting');
           emit({ type: 'error', error: 'results_stuck' });
           setTimeout(() => process.exit(6), 100);

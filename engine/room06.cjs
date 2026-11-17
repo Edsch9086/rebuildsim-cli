@@ -39,7 +39,7 @@ function parseRoom06(buf) {
     let ready = null;
     // Marker: 00 80 ff ff for red seats, 00 00 ff ff for blue seats;
     // the ready byte follows it (0 = not ready, 1 = ready).
-    const stop = Math.min(buf.length - 5, i + 8 + len + 34);
+    const stop = Math.min(buf.length - 4, i + 8 + len + 34);
     for (let q = i + 8 + len; q < stop; q++) {
       // The four-byte field before the ready byte ends in ff ff; its first
       // bytes vary by seat (00 80, 00 00, or ff ff). The ready byte is
