@@ -389,6 +389,7 @@ fn main() {
     let mut in_match = false;
     let mut ready_seen = false;
     let mut joined = false;
+    let mut room_state_seen = false;
     let mut join_started: Option<Instant> = None;
     let mut last_state = Instant::now();
     let mut last_heartbeat = Instant::now();
@@ -412,7 +413,7 @@ fn main() {
         if let Some(t) = join_started {
             if t.elapsed() > Duration::from_secs(args.join_timeout.max(1)) {
                 eprintln!(
-                    "join timeout: no room join after {:.1}s; engine is stalled or blocked",
+                    "join timeout: no room state after {:.1}s; engine is stalled or blocked",
                     t.elapsed().as_secs_f64()
                 );
                 engine.shutdown(Duration::from_secs(1));
@@ -457,7 +458,10 @@ fn main() {
                 );
                 print_seats(&seats);
                 joined = true;
-                join_started = None;
+                if room_state_seen || !seats.is_empty() {
+                    room_state_seen = true;
+                    join_started = None;
+                }
                 last_heartbeat = Instant::now();
                 if let Some(active) = match_active {
                     in_match = active;
@@ -480,6 +484,8 @@ fn main() {
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
                 print_seats(&seats);
+                room_state_seen = true;
+                join_started = None;
                 last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Match {
@@ -621,6 +627,7 @@ fn main() {
                                 demo = Some(Demo::default());
                             }
                             joined = false;
+                            room_state_seen = false;
                             ready_seen = false;
                             join_started = None;
                             fatal_error = false;
@@ -658,6 +665,7 @@ fn main() {
                             demo = Some(Demo::default());
                         }
                         joined = false;
+                        room_state_seen = false;
                         ready_seen = false;
                         join_started = None;
                         fatal_error = false;

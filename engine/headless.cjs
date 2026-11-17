@@ -314,6 +314,7 @@ const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.en
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null, roomSocketId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
+let startClicks = 0;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -397,6 +398,7 @@ function resetMatchState() {
   if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
   readyClicked = false;
   startClicked = false;
+  startClicks = 0;
   lastReadyClickAt = 0;
   matchWasActive = false;
   matchStartedAt = 0;
@@ -446,20 +448,21 @@ function noteSeatPresence(ours) {
     }
     return;
   }
-  if (!seated || (matchStarted && seated)) return;
+  if (!seated) return;
   if (seatMissingSince) return;
+  const delay = matchStarted ? 5000 : 2500;
   seatMissingSince = Date.now();
   seatDemoteTimer = setTimeout(() => {
     seatDemoteTimer = null;
     if (!seatMissingSince) return;
-    if (seated && Date.now() - seatMissingSince >= 2500) {
+    if (seated && Date.now() - seatMissingSince >= delay) {
       seated = false;
       role = 'spectator';
-      log('seat not present for 2.5s; demoting to spectator');
+      log(`seat not present for ${delay / 1000}s; demoting to spectator`);
       emitRoom();
-      failSpectator('seat missing for 2.5s');
+      failSpectator(`seat missing for ${delay / 1000}s`);
     }
-  }, 2700);
+  }, delay + 200);
 }
 
 function clearRoomIdentity() {
@@ -545,7 +548,8 @@ function applyRoom06(buf) {
   if (flow.joined) {
     const ours = roomSeats.some(s => s.name === OPT.username);
     if (matchStarted && seated && !ours) {
-      log('ignoring apparent seat loss during a match');
+      log('seat missing during match; debouncing');
+      noteSeatPresence(false);
       return false;
     }
     if (!ours) {
@@ -607,6 +611,7 @@ function onMatchStart() {
   matchStarted = true;
   matchWasActive = true;
   matchStartedAt = Date.now();
+  startClicks = 0;
   readyClicked = true;
   startClicked = true;
   // Seat order does not change during a match; re-apply it after the reset
@@ -702,14 +707,16 @@ globalThis.WebSocket = class extends NativeWS {
         handleServerFrame(buf, id);
       }
     });
+    this.__rbOpened = false;
     this.addEventListener('open', () => {
+      this.__rbOpened = true;
       wsOpen++;
       if (id === 2 && !roomSocketId) roomSocketId = id;
       if (globalThis.__RB_DEBUG) log('WS open', id, url);
       emit({ type: 'ws', state: 'open', id, url });
     });
     this.addEventListener('close', (e) => {
-      wsOpen = Math.max(0, wsOpen - 1);
+      if (this.__rbOpened) wsOpen = Math.max(0, wsOpen - 1);
       wsClosed++;
       const room = id === lastRoomWsId || id === roomSocketId;
       log('WS close', id, e.code, e.reason, room ? '(room)' : '');
@@ -891,7 +898,7 @@ function validFuelRecord(a, off) {
   const f = a[off];
   if (f !== 0 && f !== 1) return false;
   const z = a[off + 5] | (a[off + 6] << 8);
-  return z >= 32700 && z <= 33200;
+  return z >= 30000 && z <= 40000;
 }
 
 function verifyFuelBase() {
@@ -1454,6 +1461,23 @@ function clickStartWhenReady(attempt = 0, force = false) {
   const allReady = roomSeats.length > 0 && roomSeats.every(s => s.ready === true);
   if (allReady) {
     globalThis.__ctl.click(1150, 688);
+    startClicks++;
+    if (startClicks < 3) {
+      uiLater(() => {
+        if (!flow.match) {
+          startClicked = false;
+          clickStartWhenReady(0, force);
+        }
+      }, 5000);
+    } else {
+      uiLater(() => {
+        if (!flow.match) {
+          log('start click not observed after retries');
+          emit({ type: 'error', error: 'not_all_ready', detail: 'start not observed' });
+          startClicked = false;
+        }
+      }, 5000);
+    }
     return;
   }
   if (attempt >= 24) {
@@ -1490,7 +1514,7 @@ function onTrack(name, params) {
   if (OPT.debug && name !== 'settings_snapshot') log('TRACK', name, JSON.stringify(p).slice(0, 300));
   if (name === 'page_view') {
     const path = p.page_path || '';
-    if ((path === '/menu' || path === '/multiplayer') && flow.joined && !flow.match) {
+    if ((path === '/menu' || path === '/multiplayer') && flow.joined) {
       log('left the room screen; exiting');
       emit({ type: 'error', error: 'left_room' });
       setTimeout(() => process.exit(6), 100);

@@ -557,6 +557,12 @@ fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
             "username must be 1-10 printable ASCII characters",
         ));
     }
+    if opts.emit_hz < 1 || opts.emit_hz > 60 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "emit_hz must be 1..60",
+        ));
+    }
     if let Some(code) = &opts.code {
         if code.len() != 5 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
             return Err(std::io::Error::new(
@@ -628,6 +634,12 @@ impl Engine {
         validate_options(opts)?;
         let mut cmd = Command::new("node");
         cmd.arg(&opts.engine);
+        if opts.emit_hz < 1 || opts.emit_hz > 60 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "emit_hz must be 1..60",
+            ));
+        }
         if let Some(code) = &opts.code {
             cmd.arg("--code").arg(code);
         }
