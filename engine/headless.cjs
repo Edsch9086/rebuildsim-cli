@@ -876,6 +876,7 @@ function locateFuelFromPacket() {
       for (const q of probes) {
         const off = base + q.id * 7;
         if (!validFuelRecord(a, off)) continue;
+        if (a[off] === 0 || q.count === 0) { ok++; total++; continue; }
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
         const mz = a[off + 5] | (a[off + 6] << 8);
@@ -899,6 +900,7 @@ function validFuelRecord(a, off) {
   if (off + 7 > a.length) return false;
   const f = a[off];
   if (f !== 0 && f !== 1) return false;
+  if (f === 0) return true; // consumed/absent records may be zeroed
   const z = a[off + 5] | (a[off + 6] << 8);
   return z >= 30000 && z <= 40000;
 }
@@ -913,6 +915,7 @@ function verifyFuelBase() {
   for (const p of probes) {
     const off = fuelAddr + p.id * 7;
     if (!validFuelRecord(a, off)) return false;
+    if (a[off] === 0 || p.count === 0) { ok++; checked++; continue; }
     const mx = a[off + 1] | (a[off + 2] << 8);
     const my = a[off + 3] | (a[off + 4] << 8);
     const mz = a[off + 5] | (a[off + 6] << 8);
@@ -941,6 +944,7 @@ function scanFuelRun() {
       for (const p of probes) {
         const off = i + p.id * 7;
         if (!validFuelRecord(a, off)) { ok = false; break; }
+        if (a[off] === 0 || p.count === 0) continue;
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
         const mz = a[off + 5] | (a[off + 6] << 8);
@@ -980,6 +984,7 @@ function scanFuelRun() {
       for (const p of probes) {
         const off = i + p.id * 7;
         if (!validFuelRecord(a, off)) continue;
+        if (a[off] === 0 || p.count === 0) { matched++; continue; }
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
         const mz = a[off + 5] | (a[off + 6] << 8);
