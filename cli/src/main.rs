@@ -430,6 +430,7 @@ fn main() {
                     role.unwrap_or_else(|| "?".into())
                 );
                 print_seats(&seats);
+                let first_join = !joined;
                 joined = true;
                 join_started = None;
                 last_heartbeat = Instant::now();
@@ -445,9 +446,12 @@ fn main() {
                     last_state = Instant::now();
                 }
                 if !seated {
-                    eprintln!("joined as a spectator; this bot cannot drive");
-                    engine.shutdown(Duration::from_secs(1));
-                    std::process::exit(7);
+                    if first_join {
+                        eprintln!("joined as a spectator; this bot cannot drive");
+                        engine.shutdown(Duration::from_secs(1));
+                        std::process::exit(7);
+                    }
+                    eprintln!("room update reports no driver seat; waiting for engine outcome");
                 }
             }
             Ok(Some(EngineEvent::Seats { code, seats })) => {

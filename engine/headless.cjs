@@ -462,6 +462,7 @@ function noteSeatPresence(ours) {
 }
 
 function clearRoomIdentity() {
+  fuelApplied = false;
   roomSeats = [];
   roomNames = new Set();
   allianceByName.clear();
@@ -1341,7 +1342,8 @@ function click(x, y) {
   const gen = uiGeneration;
   mouse('mousemove', x, y, 0, 0);
   setTimeout(() => { if (gen === uiGeneration) mouse('mousedown', x, y, 0, 1); }, 50);
-  setTimeout(() => { if (gen === uiGeneration) mouse('mouseup', x, y, 0, 0); }, 100);
+  // Always release: a canceled click must not leave the game with a held button.
+  setTimeout(() => mouse('mouseup', x, y, 0, 0), 100);
 }
 globalThis.__ctl = { key, tapKey, mouse, click, canvas, Module, getMem: () => mem, wslog };
 
@@ -1453,6 +1455,11 @@ function onTrack(name, params) {
   if (OPT.debug && name !== 'settings_snapshot') log('TRACK', name, JSON.stringify(p).slice(0, 300));
   if (name === 'page_view') {
     const path = p.page_path || '';
+    if ((path === '/menu' || path === '/multiplayer') && flow.joined && !flow.match) {
+      log('left the room screen; exiting');
+      emit({ type: 'error', error: 'left_room' });
+      setTimeout(() => process.exit(6), 100);
+    }
     if (path === '/menu' && !flow.menu) {
       flow.menu = true;
       setTimeout(() => globalThis.__ctl.click(1070, 244), 400);
@@ -1643,6 +1650,17 @@ let lastScoreKey = '';
 setInterval(() => {
   if (!mem || !matchStarted) return;
   const fuelNow = Date.now();
+  const clockStalled = flow.match && (
+    (clockStarted && last41At && fuelNow - last41At > 3000)
+    || (!clockStarted && matchStartedAt && fuelNow - matchStartedAt > 15000));
+  if (clockStalled) {
+    log('match clock stalled; stopping state emission');
+    emit({ type: 'error', error: 'match_clock_stalled' });
+    matchStarted = false;
+    flow.match = false;
+    if (flow.joined) emitRoom();
+    return;
+  }
   if (fuelAddr && fuelNow - lastFuelVerify > 2000) {
     lastFuelVerify = fuelNow;
     if (verifyFuelBase()) {
