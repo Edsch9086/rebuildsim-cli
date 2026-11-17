@@ -181,7 +181,9 @@ and a Chromium binary; see the header comment.
   or separate IPs for six-bot runs.
 - A dropped room WebSocket is fatal for the current match; the engine reports it
   but does not auto-reconnect. The Rust CLI exits 5 on state timeout and 6 on
-  room-WS close (disable the latter with `--allow-ws-close`).
+  room-WS close (disable the latter with `--allow-ws-close`). In the lobby,
+  `--restart-on-exit` can respawn/rejoin the same room code (up to
+  `--max-restarts`, default 3); it is disabled once a match starts.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
   fetches the latest build and writes `build.json`; the engine compares it with
   the live page `BUILD` and exits 3 on drift. `--expect-build` checks before

@@ -286,6 +286,12 @@ match in progress puts you in as a spectator, so the safe behavior is a clear
 failure; the orchestrator can start a fresh bot for the next match. The
 room-list socket closing is reported but is not fatal.
 
+For **lobby** disconnects, `--restart-on-exit` respawns the engine and rejoins
+the same room code after 2 seconds, up to `--max-restarts N` (default 3). It is
+join-mode only (not with `--create`) and is disabled once a match starts, so it
+never turns a driver bot into a spectator mid-match. Build/protocol failures
+(exit 3/4) are not retried.
+
 ## Build pinning
 
 `engine/prepare.mjs` writes `cache/build.json` with the downloaded `BUILD` hash.

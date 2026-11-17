@@ -38,6 +38,8 @@ struct Args {
     no_build_check: bool,
     state_timeout: u64,
     exit_on_ws_close: bool,
+    restart_on_exit: bool,
+    max_restarts: u32,
 }
 
 impl Default for Args {
@@ -64,6 +66,8 @@ impl Default for Args {
             no_build_check: false,
             state_timeout: 5,
             exit_on_ws_close: true,
+            restart_on_exit: false,
+            max_restarts: 3,
         }
     }
 }
@@ -98,6 +102,8 @@ OPTIONS:
   --no-build-check    skip the live server BUILD comparison
   --state-timeout <S> fail (exit 5) if no state arrives for S seconds in a match (default: 5)
   --allow-ws-close    keep running if the room WebSocket closes (default: exit 6)
+  --restart-on-exit   rejoin the lobby after a disconnect (join mode only)
+  --max-restarts <N>  restart limit with --restart-on-exit (default: 3)
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -138,6 +144,15 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--state-timeout needs a value")?
                     .parse()
                     .map_err(|_| "invalid --state-timeout")?
+            }
+            "--allow-ws-close" => a.exit_on_ws_close = false,
+            "--restart-on-exit" => a.restart_on_exit = true,
+            "--max-restarts" => {
+                a.max_restarts = it
+                    .next()
+                    .ok_or("--max-restarts needs a value")?
+                    .parse()
+                    .map_err(|_| "invalid --max-restarts")?
             }
             "--emit-hz" => {
                 a.emit_hz = it
@@ -217,6 +232,30 @@ fn print_state(state: &GameState, username: &str) {
     );
 }
 
+fn spawn_engine(opts: &EngineOptions) -> Engine {
+    match Engine::spawn(opts) {
+        Ok(engine) => engine,
+        Err(e) => {
+            eprintln!("failed to start engine: {e}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn restart_engine(opts: &EngineOptions, restarts: &mut u32, max_restarts: u32) -> Option<Engine> {
+    if *restarts >= max_restarts {
+        eprintln!("restart limit ({max_restarts}) reached");
+        return None;
+    }
+    *restarts += 1;
+    eprintln!(
+        "restarting engine after disconnect ({}/{}) in 2s...",
+        *restarts, max_restarts
+    );
+    std::thread::sleep(Duration::from_secs(2));
+    Some(spawn_engine(opts))
+}
+
 fn main() {
     let args = match parse_args() {
         Ok(a) => a,
@@ -252,13 +291,8 @@ fn main() {
     opts.no_build_check = args.no_build_check;
 
     eprintln!("engine: {}", args.engine.display());
-    let mut engine = match Engine::spawn(&opts) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("failed to start engine: {e}");
-            std::process::exit(1);
-        }
-    };
+    let mut engine = spawn_engine(&opts);
+    let mut restarts = 0u32;
 
     let mut demo = if args.demo {
         Some(Demo::default())
@@ -298,6 +332,7 @@ fn main() {
                     role.unwrap_or_else(|| "?".into())
                 );
                 print_seats(&seats);
+                in_match = false;
             }
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
@@ -312,6 +347,9 @@ fn main() {
             Ok(Some(EngineEvent::State(state))) => {
                 states += 1;
                 last_state = Instant::now();
+                if state.phase == "end" {
+                    in_match = false;
+                }
                 if args.watch || states == 1 || states % 5 == 0 {
                     print_state(&state, &args.username);
                 }
@@ -368,6 +406,15 @@ fn main() {
                         "room WebSocket closed; exiting (use --allow-ws-close to keep running)"
                     );
                     engine.kill();
+                    if args.restart_on_exit && args.code.is_some() && !in_match {
+                        if let Some(new_engine) =
+                            restart_engine(&opts, &mut restarts, args.max_restarts)
+                        {
+                            engine = new_engine;
+                            last_state = Instant::now();
+                            continue;
+                        }
+                    }
                     std::process::exit(6);
                 }
             }
@@ -378,6 +425,19 @@ fn main() {
             Ok(None) => {
                 let code = engine.wait_code();
                 eprintln!("engine exited code={code:?}");
+                let retryable = args.restart_on_exit
+                    && args.code.is_some()
+                    && !in_match
+                    && !matches!(code, Some(0) | Some(3) | Some(4));
+                if retryable {
+                    if let Some(new_engine) =
+                        restart_engine(&opts, &mut restarts, args.max_restarts)
+                    {
+                        engine = new_engine;
+                        last_state = Instant::now();
+                        continue;
+                    }
+                }
                 if let Some(c) = code {
                     if c != 0 {
                         std::process::exit(c);

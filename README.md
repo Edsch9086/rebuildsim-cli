@@ -53,7 +53,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
 | Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop + substages |
 | Build pin / drift fail-fast | ✅ `build.json` + live check + `--expect-build` |
-| Timeouts / disconnect handling | ✅ state watchdog + room-WS close exit |
+| Timeouts / disconnect handling | ✅ state watchdog, room-WS exit, lobby restart |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | ✅ host UI flow; 25% → 150 fuel validated |
