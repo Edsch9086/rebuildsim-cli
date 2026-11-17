@@ -125,7 +125,13 @@ fn parse_args() -> Result<Args, String> {
             }
             "--code" => a.code = Some(it.next().ok_or("--code needs a value")?),
             "--username" => a.username = it.next().ok_or("--username needs a value")?,
-            "--spawnpoint" => a.spawnpoint = Some(it.next().ok_or("--spawnpoint needs a value")?),
+            "--spawnpoint" => {
+                let value = it.next().ok_or("--spawnpoint needs a value")?;
+                if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
+                    return Err("invalid --spawnpoint".into());
+                }
+                a.spawnpoint = Some(value);
+            }
             "--create" => a.create = true,
             "--start" => a.start = true,
             "--demo" => a.demo = true,
@@ -486,7 +492,8 @@ fn main() {
                 last_heartbeat = Instant::now();
                 if state.phase == "end" {
                     in_match = false;
-                    match_seen = true;
+                    // Do not re-arm match_seen here: a Room{match_active:false}
+                    // may already have cleared it for lobby restart.
                 } else {
                     in_match = true;
                     match_seen = true;
@@ -542,7 +549,10 @@ fn main() {
                 };
                 eprintln!(
                     "engine error: {error}{}{extra}",
-                    detail.map(|d| format!(" ({d})")).unwrap_or_default()
+                    detail
+                        .filter(|d| !d.is_empty())
+                        .map(|d| format!(" ({d})"))
+                        .unwrap_or_default()
                 );
             }
             Ok(Some(EngineEvent::Ws {

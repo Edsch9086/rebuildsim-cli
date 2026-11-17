@@ -365,8 +365,10 @@ The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 - `--spawnpoint` is deferred. The engine joins with the default seat and logs
   that the flag is ignored; a tuned bot can infer its spawn from `me`.
 - Blue control-frame inversion is implemented and the 4th seat is confirmed
-  blue. The 4-client browser test passes with `blueForward:true` (BlueD keyboard
-  `W` moves toward red in the host frame), and the output frame rotates 180°.
+  blue. The 4-client test asserts the four seats, host `me`, robot identities,
+  and the normalized frame; it logs blue keyboard movement as observational
+  evidence (a verified run moved BlueD toward red, dx -10.376). Headless
+  Chromium tab focus makes that movement check flaky, so it is not a hard gate.
   A headless blue *gamepad* seat still needs the team server (the public per-IP
   limit blocks a second engine).
 - Six-robot identity/team validation should be repeated on the team lead's

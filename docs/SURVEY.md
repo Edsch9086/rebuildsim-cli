@@ -520,9 +520,11 @@ input decreases normalized x. A real blue client starts at the mirrored world
 spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
 **increases** normalized x — the same coordinates and control response the API
 is designed to provide for red. This test proves the output-frame rotation.
-The 4-client browser test additionally shows the real game inverting blue
-keyboard input: BlueD pressed `W` and moved toward red (global dx -10.376),
-which is +x in its normalized frame. A headless blue *gamepad* seat should still be
+The 4-client browser test additionally logs real blue keyboard movement: in a
+verified run BlueD pressed `W` and moved toward red (global dx -10.376), which is
++x in its normalized frame. Headless Chromium sometimes does not deliver focus
+to the background tab, so the test logs this as observational evidence rather
+than a hard pass/fail assertion. A headless blue *gamepad* seat should still be
 validated on the team server (same-IP limit prevents a second public engine).
 `--field-frame` restores raw global coordinates.
 

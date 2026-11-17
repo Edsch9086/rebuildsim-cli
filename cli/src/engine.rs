@@ -168,6 +168,10 @@ pub struct Fuel {
     pub flags: Option<u32>,
 }
 
+fn default_frame() -> String {
+    "unknown".to_string()
+}
+
 fn deserialize_alliance<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -216,7 +220,7 @@ pub struct GameState {
     #[serde(default)]
     pub ws_closed: u32,
     /// "alliance" (default, identical for red and blue) or "field".
-    #[serde(default)]
+    #[serde(default = "default_frame")]
     pub frame: String,
     /// Our alliance for diagnostics; bots should not need it in alliance frame.
     #[serde(default, deserialize_with = "deserialize_alliance")]
@@ -527,8 +531,63 @@ fn reader_loop(
     }
 }
 
+fn validate_option_value(name: &str, value: &str) -> std::io::Result<()> {
+    if value.is_empty() || value != value.trim() || value.starts_with('-') {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("invalid {name}: must be non-empty, trimmed, and not start with '-'"),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
+    if opts.username.is_empty()
+        || opts.username.len() > 10
+        || opts.username.starts_with('-')
+        || !opts.username.bytes().all(|b| (0x20..=0x7e).contains(&b))
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "username must be 1-10 printable ASCII characters",
+        ));
+    }
+    if let Some(code) = &opts.code {
+        if code.len() != 5 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "room code must be 5 alphanumeric characters",
+            ));
+        }
+    }
+    if let Some(spawn) = &opts.spawn {
+        validate_option_value("spawn", spawn)?;
+    }
+    if let Some(fuel) = &opts.fuel {
+        validate_option_value("fuel", fuel)?;
+    }
+    if let Some(server) = &opts.server {
+        validate_option_value("server", server)?;
+        let bracketed = server.starts_with('[') && server.contains("]:");
+        if !bracketed && server.matches(':').count() != 1 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "server must be HOST:PORT (bracket IPv6 as [addr]:port)",
+            ));
+        }
+    }
+    if let Some(build) = &opts.expect_build {
+        validate_option_value("expect-build", build)?;
+    }
+    if let Some(hub) = &opts.hub_order {
+        validate_option_value("hub-order", hub)?;
+    }
+    Ok(())
+}
+
 impl Engine {
     pub fn spawn(opts: &EngineOptions) -> std::io::Result<Self> {
+        validate_options(opts)?;
         let mut cmd = Command::new("node");
         cmd.arg(&opts.engine);
         if let Some(code) = &opts.code {
@@ -695,9 +754,10 @@ impl Engine {
     /// Wait for the engine process to exit and return its status code.
     pub fn wait_code(&mut self) -> Option<i32> {
         // Closing stdin makes the engine exit (`--exit-on-stdin-close`) even
-        // if the caller never asked it to quit.
+        // if the caller never asked it to quit. Bound the wait so a wedged
+        // engine cannot block the caller forever.
         self.stdin.take();
-        self.child.wait().ok().and_then(|s| s.code())
+        self.wait_code_timeout(Duration::from_secs(5))
     }
 
     /// Wait briefly for the engine to exit; kill it if it does not.
@@ -833,6 +893,20 @@ mod tests {
         out.extend_from_slice(&seq.to_le_bytes());
         out.extend_from_slice(payload);
         out
+    }
+
+    #[test]
+    fn rejects_flag_like_forwarded_values() {
+        let mut opts = EngineOptions::new("engine.cjs", "Bot");
+        opts.server = Some("--no-build-check".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = Some("localhost:8080".into());
+        assert!(validate_options(&opts).is_ok());
+        opts.username = "--binary".into();
+        assert!(validate_options(&opts).is_err());
+        opts.username = "Bot".into();
+        opts.code = Some("ABCDE".into());
+        assert!(validate_options(&opts).is_ok());
     }
 
     #[test]

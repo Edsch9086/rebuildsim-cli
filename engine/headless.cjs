@@ -311,7 +311,7 @@ if (OPT.server) {
 
 const wslog = [];
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
-let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
+let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null, roomSocketId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let lastReadyClickAt = 0;
@@ -693,16 +693,18 @@ globalThis.WebSocket = class extends NativeWS {
     });
     this.addEventListener('open', () => {
       wsOpen++;
+      if (wsOpen === 2 && !roomSocketId) roomSocketId = id;
       if (globalThis.__RB_DEBUG) log('WS open', id, url);
       emit({ type: 'ws', state: 'open', id, url });
     });
     this.addEventListener('close', (e) => {
       wsOpen = Math.max(0, wsOpen - 1);
       wsClosed++;
-      const room = id === lastRoomWsId;
+      const room = id === lastRoomWsId || id === roomSocketId;
       log('WS close', id, e.code, e.reason, room ? '(room)' : '');
       emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason, url, room });
-      if (room) lastRoomWsId = null;
+      if (id === lastRoomWsId) lastRoomWsId = null;
+      if (id === roomSocketId) roomSocketId = null;
     });
     this.addEventListener('error', () => {
       if (globalThis.__RB_DEBUG) log('WS error', id);
@@ -1617,7 +1619,7 @@ setTimeout(() => {
   if (!mem) {
     log('wasm memory was not captured; aborting');
     try { emit({ type: 'error', error: 'memory_unavailable' }); } catch {}
-    setTimeout(() => process.exit(2), 100);
+    setTimeout(() => process.exit(1), 100);
   }
 }, 30000);
 
