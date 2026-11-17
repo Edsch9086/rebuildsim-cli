@@ -50,10 +50,10 @@ Robot poses therefore have to come from the client simulation.
 ```
 u8   0x42
 u32  tick
-u16  456            // total fuel count
+u16  total          // this capture: 456; dynamic 1..~4300
 u16  48             // records in this packet
 48 × {
-  u16 id            // 0..455, 1:1 with memory array index
+  u16 id            // 0..total-1, 1:1 with memory array index
   u16 count         // usually 1; >1 for a cluster
   u32 0x00010000
   u32 flags         // 0 normal; 7 seen for a hub cluster
@@ -305,8 +305,10 @@ The headless engine drives the game with synthetic DOM events:
 - The room code input is text box index 1; the name is box 0.
 - Use `rb_tap_text_box(index, x, y)` + `rb_type_text(str)` for game text fields.
 - `CREATE A ROOM`, `JOIN`, `READY`, `START MATCH` are normal clicks.
-- The host's start flow may show "N players are not ready" → `START ANYWAY` or
-  have the bot click `READY` first.
+- A seat starts NOT ready; clicking READY sets the 0x06 ready bit from 0 to 1.
+  Click only while that bit is 0 (the engine does this) so an already-ready seat
+  is not toggled off. The host's start flow may still show "N players are not
+  ready" → `START ANYWAY`.
 - Joining a room whose match is already running puts you in as a **spectator**
   (`via: joined_running`); join before start to drive.
 

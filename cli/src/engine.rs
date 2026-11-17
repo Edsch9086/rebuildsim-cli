@@ -310,7 +310,7 @@ pub enum EngineEvent {
         #[serde(default)]
         server_build: Option<String>,
         #[serde(default)]
-        ok: bool,
+        ok: Option<bool>,
     },
     #[serde(rename = "protocol")]
     Protocol { version: Option<u8> },
@@ -330,6 +330,9 @@ pub enum EngineEvent {
         error: String,
         #[serde(default)]
         detail: Option<String>,
+        /// Extra diagnostics such as build hashes, server version, or file.
+        #[serde(flatten)]
+        extra: serde_json::Map<String, serde_json::Value>,
     },
     #[serde(rename = "ws")]
     Ws {
@@ -691,6 +694,9 @@ impl Engine {
 
     /// Wait for the engine process to exit and return its status code.
     pub fn wait_code(&mut self) -> Option<i32> {
+        // Closing stdin makes the engine exit (`--exit-on-stdin-close`) even
+        // if the caller never asked it to quit.
+        self.stdin.take();
         self.child.wait().ok().and_then(|s| s.code())
     }
 
@@ -827,6 +833,21 @@ mod tests {
         out.extend_from_slice(&seq.to_le_bytes());
         out.extend_from_slice(payload);
         out
+    }
+
+    #[test]
+    fn error_keeps_extra_diagnostics() {
+        let event: EngineEvent = serde_json::from_str(
+            r#"{"type":"error","error":"build_drift","cached":"a","server":"b"}"#,
+        )
+        .expect("error event");
+        match event {
+            EngineEvent::Error { error, extra, .. } => {
+                assert_eq!(error, "build_drift");
+                assert_eq!(extra.get("server").and_then(|v| v.as_str()), Some("b"));
+            }
+            other => panic!("expected error, got {other:?}"),
+        }
     }
 
     #[test]

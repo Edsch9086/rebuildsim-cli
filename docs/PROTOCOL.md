@@ -232,7 +232,7 @@ omitted) remains fully compatible.
 ### 1.8 Other observed packets
 
 ```
-S→C 48 <u32 tick> <4 × u32 status> <8-byte hash>   // 30 bytes
+S→C 48 <u32 tick> <4 × u32 status> <8-byte hash>   // 29 bytes incl. tag
 S→C 4b <u32 tick> ... <3 × u16 axes> 34            // 8 or 19 bytes
 S→C 43 <u32 tick> <u32>                            // 9 bytes
 ```

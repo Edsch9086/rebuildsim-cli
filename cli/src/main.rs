@@ -142,8 +142,8 @@ fn parse_args() -> Result<Args, String> {
             }
             "--server" => {
                 let value = it.next().ok_or("--server needs a value")?;
-                if value.trim().is_empty() {
-                    return Err("--server must not be empty".into());
+                if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
+                    return Err("--server must be a non-empty host:port value".into());
                 }
                 a.server = Some(value);
             }
@@ -158,8 +158,8 @@ fn parse_args() -> Result<Args, String> {
             }
             "--expect-build" => {
                 let value = it.next().ok_or("--expect-build needs a value")?;
-                if value.trim().is_empty() {
-                    return Err("--expect-build must not be empty".into());
+                if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
+                    return Err("--expect-build must not be empty or padded".into());
                 }
                 a.expect_build = Some(value);
             }
@@ -210,11 +210,17 @@ fn parse_args() -> Result<Args, String> {
     if a.username.is_empty()
         || a.username != a.username.trim()
         || a.username.len() > 10
-        || !a.username.is_ascii()
+        || a.username.starts_with('-')
+        || !a.username.bytes().all(|b| (0x20..=0x7e).contains(&b))
     {
         return Err(
             "--username must be 1-10 ASCII characters without leading/trailing spaces".into(),
         );
+    }
+    if let Some(code) = &a.code {
+        if code.len() != 5 || !code.bytes().all(|b| b.is_ascii_alphanumeric()) {
+            return Err("--code must be a 5-character alphanumeric room code".to_string());
+        }
     }
     if a.code.is_some() && a.create {
         return Err("use --code <LOBBY> or --create, not both".to_string());
@@ -429,12 +435,14 @@ fn main() {
                 last_heartbeat = Instant::now();
                 if let Some(active) = match_active {
                     in_match = active;
-                    if !active {
-                        match_seen = false;
-                        last_state = Instant::now();
-                    }
+                    match_seen = active;
+                    last_state = Instant::now();
                 } else {
+                    // Legacy engine: a room event means we are back in the
+                    // lobby, so do not leave a stale in-match watchdog armed.
+                    in_match = false;
                     match_seen = false;
+                    last_state = Instant::now();
                 }
                 if !seated {
                     eprintln!("joined as a spectator; this bot cannot drive");
@@ -497,8 +505,10 @@ fn main() {
                     build,
                     server_build.unwrap_or_else(|| "?".into())
                 );
-                if !ok {
+                if ok == Some(false) {
                     eprintln!("build check failed");
+                    engine.shutdown(Duration::from_secs(1));
+                    std::process::exit(3);
                 }
             }
             Ok(Some(EngineEvent::Protocol { version })) => {
@@ -512,9 +522,18 @@ fn main() {
             })) => {
                 println!("score red={red} blue={blue} auto={auto_red}/{auto_blue}");
             }
-            Ok(Some(EngineEvent::Error { error, detail })) => {
+            Ok(Some(EngineEvent::Error {
+                error,
+                detail,
+                extra,
+            })) => {
+                let extra = if extra.is_empty() {
+                    String::new()
+                } else {
+                    format!(" {}", serde_json::to_string(&extra).unwrap_or_default())
+                };
                 eprintln!(
-                    "engine error: {error}{}",
+                    "engine error: {error}{}{extra}",
                     detail.map(|d| format!(" ({d})")).unwrap_or_default()
                 );
             }
