@@ -33,13 +33,18 @@ function parseRoom06(buf) {
     const teamFlag = buf[i + 1];
     if (teamFlag > 1) continue;
     // The per-seat ready flag follows the `00 80 ff ff` marker after the
-    // 16-byte name field: 0 = not ready, 1 = ready (verified live).
+    // 16-byte name field: 0 = not ready, 1 = ready (verified live). The marker's
+    // second byte is 0x80 for red and 0x00 for blue.
     let ready = null;
-    const marker = [0x00, 0x80, 0xff, 0xff];
+    // Marker: 00 80 ff ff for red seats, 00 00 ff ff for blue seats;
+    // the ready byte follows it (0 = not ready, 1 = ready).
     const stop = Math.min(buf.length - 5, i + 8 + len + 34);
     for (let q = i + 8 + len; q < stop; q++) {
-      if (buf[q] === marker[0] && buf[q + 1] === marker[1]
-          && buf[q + 2] === marker[2] && buf[q + 3] === marker[3]) {
+      // The four-byte field before the ready byte ends in ff ff; its first
+      // bytes vary by seat (00 80, 00 00, or ff ff). The ready byte is
+      // 0 = not ready, 1 = ready.
+      if (buf[q + 2] === 0xff && buf[q + 3] === 0xff
+          && (buf[q + 4] === 0 || buf[q + 4] === 1)) {
         ready = buf[q + 4] === 1;
         break;
       }

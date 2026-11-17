@@ -521,7 +521,7 @@ function applyRoom06(buf) {
     allianceSourceByName.set(seat.name, 'room');
     if (seat.name === OPT.username) ourAllianceCache = seat.alliance;
   }
-  const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.robot_id}:${s.team_flag}:${s.alliance}`).join('|');
+  const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.robot_id}:${s.team_flag}:${s.alliance}:${s.ready}`).join('|');
   if (key !== seatsKey) {
     seatsKey = key;
     emit({ type: 'seats', code: roomCode, seats: roomSeats });
@@ -696,6 +696,7 @@ globalThis.WebSocket = class extends NativeWS {
       const room = id === lastRoomWsId;
       log('WS close', id, e.code, e.reason, room ? '(room)' : '');
       emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason, url, room });
+      if (room) lastRoomWsId = null;
     });
     this.addEventListener('error', () => {
       if (globalThis.__RB_DEBUG) log('WS error', id);

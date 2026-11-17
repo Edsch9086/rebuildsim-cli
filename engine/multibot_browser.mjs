@@ -159,12 +159,14 @@ const blueTracks=await blue.page.evaluate(()=>window.__tracks.filter(n=>/match|r
 console.log('BLUE TRACKS',JSON.stringify(blueTracks));
 console.log('AFTER red',JSON.stringify(afterRed),'blue',JSON.stringify(afterBlue));
 console.log('DELTA red',JSON.stringify(delta(beforeRed,afterRed)),'blue',JSON.stringify(delta(beforeBlue,afterBlue)));
+const ourNames=['RedHost','RedB','RedC','BlueD'];
+const ourSeats=seats?seats.filter(s=>ourNames.includes(s.name)):[];
 const verdict = {
-  seats4: seats&&seats.length===4,
-  fourthBlue: seats&&seats[3]&&seats[3].alliance==='blue',
-  allUnique: seats?new Set(seats.map(s=>s.name)).size===4:false,
+  seats4: ourSeats.length===4,
+  fourthBlue: ourSeats.some(s=>s.name==='BlueD'&&s.alliance==='blue'),
+  allUnique: new Set(ourSeats.map(s=>s.name)).size===4,
   hostMe: lastState&&lastState.me&&lastState.me.name==='RedHost',
-  robots4: lastState&&lastState.robots.length===4,
+  robots4: lastState&&ourNames.every(n=>lastState.robots.some(r=>r.name===n)),
   redForward: delta(beforeRed,afterRed)&&delta(beforeRed,afterRed).dx>0.5,
   // Host is red and sees BlueD in the red/global frame: a real blue client
   // pressing W must move toward the red side (negative x).

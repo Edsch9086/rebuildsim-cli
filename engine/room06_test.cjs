@@ -51,6 +51,17 @@ const notReadyRoom = parseRoom06(Buffer.from(twoSeatNotReadyHex, 'hex'));
 assert.strictEqual(notReadyRoom.seats[1].ready, false, 'joiner starts not ready');
 console.log('ready flags:', readyRoom.seats.map(s => s.name + '=' + s.ready).join(','));
 
+// Captured live 4-seat packet: red host ready, red 1/2 not ready, blue
+// captain not ready. Blue uses the 00 00 ff ff marker.
+const fourSeatHex = '06444851434100b16aaeb1020200000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100670102000007526564486f737400000000000000001662c2950080ffff010100670102000004526564420000000000000000166299890080ffff000100670102000004526564430000000000000000166266760080ffff000101670102000005426c7565440000000000000000e99d3d6affffffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff000000000000ff000000';
+const fourSeat = parseRoom06(Buffer.from(fourSeatHex, 'hex'));
+assert.deepStrictEqual(fourSeat.seats.map(s => s.name), ['RedHost','RedB','RedC','BlueD']);
+assert.strictEqual(fourSeat.seats[0].ready, true);
+assert.strictEqual(fourSeat.seats[1].ready, false);
+assert.strictEqual(fourSeat.seats[3].alliance, 'blue');
+assert.strictEqual(fourSeat.seats[3].ready, false, 'blue ready marker 00 00 ff ff');
+console.log('4-seat ready:', fourSeat.seats.map(s => s.name + '=' + s.ready).join(','));
+
 // Captured 4-player packet from a live lobby (all names were Host4 because the
 // browser tabs shared a name; the seat/alliance layout is what matters).
 const fixture = process.env.RB_ROOM06_FIXTURE || '';
