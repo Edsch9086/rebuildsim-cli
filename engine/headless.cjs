@@ -759,9 +759,7 @@ function locateFuelFromPacket() {
       let ok = 0, total = 0;
       for (const q of probes) {
         const off = base + q.id * 7;
-        if (off + 7 > a.length) continue;
-        const flag = a[off];
-        if (flag !== 0 && flag !== 1) continue;
+        if (!validFuelRecord(a, off)) continue;
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
         const mz = a[off + 5] | (a[off + 6] << 8);
@@ -798,7 +796,7 @@ function verifyFuelBase() {
   let checked = 0, ok = 0;
   for (const p of probes) {
     const off = fuelAddr + p.id * 7;
-    if (off + 7 > a.length) return false;
+    if (!validFuelRecord(a, off)) return false;
     const mx = a[off + 1] | (a[off + 2] << 8);
     const my = a[off + 3] | (a[off + 4] << 8);
     const mz = a[off + 5] | (a[off + 6] << 8);
