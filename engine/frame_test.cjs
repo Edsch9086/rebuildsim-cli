@@ -1,6 +1,7 @@
 // Verify the alliance-frame transform without needing a real blue seat.
-// 1) forced blue, alliance frame: the world pose/fuel/heading rotate 180 deg,
-//    and forward decreases normalized x (like a real blue client).
+// 1) forced blue, alliance frame: the world pose/fuel/heading rotate 180 deg.
+//    The underlying bot is red-spawned, so W decreases normalized x; a real
+//    blue bot starts mirrored and W increases it (see multibot_browser.mjs).
 // 2) forced blue, field frame: raw global coords, forward increases x.
 //
 // Run: node engine/frame_test.cjs
@@ -58,7 +59,7 @@ async function run(extra, drive) {
     fieldFrame: field.before.frame === 'field',
     rotated: Math.abs(alliance.before.x + field.before.x) < 0.01 && Math.abs(alliance.before.y + field.before.y) < 0.02,
     fuelRotated: Math.abs(alliance.before.fuel0.x + field.before.fuel0.x) < 0.01 && Math.abs(alliance.before.fuel0.y + field.before.fuel0.y) < 0.02,
-    blueForwardNegative: alliance.dx < -0.5,
+    forcedBlueForwardNegative: alliance.dx < -0.5,
     fieldForwardPositive: field.dx > 0.5,
     headingRotated: Math.abs(Math.abs(alliance.before.h - field.before.h) - Math.PI) < 0.05,
   };

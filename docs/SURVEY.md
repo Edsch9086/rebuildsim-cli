@@ -481,28 +481,32 @@ SEATS [{"seat":0,"name":"RedHost",...red},
        {"seat":3,"name":"BlueD","team_flag":1,"alliance":"blue"}]
 STATE {"phase":"auto","frame":"alliance",
        "robots":[RedHost red ME, RedB red, RedC red, BlueD blue]}
-DELTA red {"dx":3.722,"dy":0}
+DELTA red {"dx":3.785,"dy":0} blue {"dx":-9.682,"dy":0}
 VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
-         "hostMe":true,"robots4":true,"redForward":true,"frameAlliance":true}
+         "hostMe":true,"robots4":true,"redForward":true,
+         "blueForward":true,"frameAlliance":true}
 ```
 
 This proves four unique names occupy four seats, the host's `me` is exactly its
-own robot, and the fourth seat is blue from the `0x06` team flag. The host is
-red, so it sees BlueD in the red frame at positive x (opponent side).
+own robot, the fourth seat is blue from the `0x06` team flag, and a real blue
+browser client pressing `W` moves toward the red side (host/global dx -9.682).
+The host is red, so it sees BlueD in the red frame at positive x (opponent
+side); in BlueD's normalized frame the same motion is forward (+x).
 
 ### Alliance-normalized blue frame
 
-A real blue engine could not be added under the public per-IP limit, so the
-transform is tested directly with `engine/frame_test.cjs`:
+A second headless engine cannot be added from the same IP under the public
+per-IP limit, so the transform is tested directly with `engine/frame_test.cjs`,
+and real blue input is exercised by the browser client in the 4-client test:
 
 ```
 ALLIANCE {"before":{"x":4.6736,"y":-3.4001,"frame":"alliance","alliance":"blue",
                     "fuel0":{"x":0.366,"y":1.0466}},
-          "after":{"x":-4.3562,"y":-3.4002},"dx":-9.03}
+          "after":{"x":-4.2374,"y":-3.4002},"dx":-8.911}
 FIELD    {"before":{"x":-4.6736,"y":3.4001,"frame":"field",...},
-          "after":{"x":4.281,"y":3.4002},"dx":8.955}
+          "after":{"x":4.3893,"y":3.4002},"dx":9.063}
 VERDICT {"allianceFrame":true,"fieldFrame":true,"rotated":true,
-         "fuelRotated":true,"blueForwardNegative":true,
+         "fuelRotated":true,"forcedBlueForwardNegative":true,
          "fieldForwardPositive":true,"headingRotated":true}
 ```
 
@@ -511,9 +515,12 @@ reported as `(4.67,-3.4)`, fuel and heading rotate 180 degrees, and forward
 input decreases normalized x. A real blue client starts at the mirrored world
 spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
 **increases** normalized x — the same coordinates and control response the API
-is designed to provide for red. This test proves the output-frame rotation; a
-live headless blue seat should still be used to confirm the game internally
-inverts blue driver input. `--field-frame` restores raw global coordinates.
+is designed to provide for red. This test proves the output-frame rotation.
+The 4-client browser test additionally shows the real game inverting blue
+keyboard input: BlueD pressed `W` and moved toward red (global dx -9.682), which
+is +x in its normalized frame. A headless blue *gamepad* seat should still be
+validated on the team server (same-IP limit prevents a second public engine).
+`--field-frame` restores raw global coordinates.
 
 ### Hub status
 

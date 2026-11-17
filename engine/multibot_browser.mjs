@@ -105,6 +105,9 @@ const verdict = {
   hostMe: lastState&&lastState.me&&lastState.me.name==='RedHost',
   robots4: lastState&&lastState.robots.length===4,
   redForward: delta(beforeRed,afterRed)&&delta(beforeRed,afterRed).dx>0.5,
+  // Host is red and sees BlueD in the red/global frame: a real blue client
+  // pressing W must move toward the red side (negative x).
+  blueForward: delta(beforeBlue,afterBlue)&&delta(beforeBlue,afterBlue).dx<-0.5,
   frameAlliance: lastState&&lastState.frame==='alliance',
 };
 console.log('VERDICT',JSON.stringify(verdict));

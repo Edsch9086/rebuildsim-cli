@@ -231,8 +231,8 @@ guessing by team.
 
 With the default `frame == "alliance"`, the engine has already rotated
 positions/headings/velocities into your driver frame. Just plan in the reported
-coordinates (a live blue-seat input test is still pending; the output-frame
-rotation is verified):
+coordinates (the output-frame rotation and real blue browser movement are
+verified; a headless blue gamepad seat remains to be tested on the team server):
 
 ```rust
 let dx = target_x - me.x;

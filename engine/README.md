@@ -164,7 +164,8 @@ dependency because the headless engine itself does not need it.
 - Positions/headings/velocities are **alliance-normalized by default**: blue
   gets the same 180-degree-rotated frame as red, so identical bot logic is the
   intended contract; `alliance` is diagnostic only. `--field-frame` returns raw
-  global coordinates. A live blue-seat input test is still pending.
+  global coordinates. Output rotation and real blue browser input are verified;
+  a headless blue gamepad seat still needs the team server (public per-IP limit).
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
 - `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b). It starts
