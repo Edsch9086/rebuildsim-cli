@@ -107,7 +107,7 @@ OPTIONS:
   --allow-ws-close    keep running if the room WebSocket closes (default: exit 6)
   --restart-on-exit   rejoin the lobby after a disconnect (join mode only)
   --max-restarts <N>  restart limit with --restart-on-exit (default: 3)
-  --join-timeout <S>  fail (exit 5) if no room join within S seconds (default: 60)
+  --join-timeout <S>  fail (exit 5) if no room/seat state within S seconds (default: 60)
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.

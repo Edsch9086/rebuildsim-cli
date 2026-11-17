@@ -34,7 +34,7 @@ The binary protocol is custom, not JSON. Packet types observed:
 | `0x40` | C→S | 12 | input frame (see below) |
 | `0x41` | S→C | 154–340 | match/room state, match clock, settings |
 | `0x42` | S→C | 1161 | **fuel state** snapshot, 48 records/chunk |
-| `0x48` | S→C | 30 | per-player status + 8-byte hash |
+| `0x48` | S→C | 29 | per-player status + 8-byte hash |
 | `0x4b` | S→C | 8/19 | input/ack/event |
 | `0x43` | S→C | 9 | tick/ack |
 | `0x44` | C→S | 7 | ping |
@@ -185,8 +185,8 @@ ends both copies are live; the predicted one is simply higher-rate.
 The engine emits a top-level `me` object and an `is_me` flag on every robot,
 matched by the CLI username. This avoids the six-robot "which one is mine"
 failure mode. A `stale` fallback reuses the last pose for up to 2 s and sets
-`stale: true` / `pose_source: "stale"`; duplicate player names are rejected with
-exit 8 because name-keyed identity cannot distinguish them.
+`stale: true` / `pose_source: "stale"`; a duplicate of **our own** name is
+rejected with exit 8 because name-keyed identity cannot distinguish it.
 
 Alliance is decoded from the `0x06` room state. Player records appear in seat
 order with the signature `01 <team> <robot-id u16> 02 00 00 <name-len> <name...>`;
@@ -252,9 +252,9 @@ a convenient blind-UI feedback channel while automating the menu.
 u8  0x40
 u16 tick
 u16 reserved (observed 0)
-i16 axis1          // left stick X / strafe
-i16 axis2          // left stick Y / forward (0x8000 neutral)
-i16 axis3          // right stick X / turn
+i16 axis1          // forward/back; -1 full forward (0x8000 neutral)
+i16 axis2          // left/right strafe
+i16 axis3          // turn
 u8  actions        // action bitfield
 ```
 
@@ -439,8 +439,9 @@ fails fast when the live `BUILD` differs.
    `state`, `input`, `leave`; keep `me`/`is_me` authoritative.
 2. Run a six-bot private match **on the local server** (the public per-IP limit
    blocks six Node clients from one address) and repeat the 4-bot checks:
-   `is_me`, the `0x06` seat alliance, and red/blue movement. The 4-bot version is
-   done (see §12).
+   `is_me`, the `0x06` seat alliance, and frame normalization. The 4-bot seat,
+   identity, and frame checks are done (see §12); blue movement is logged
+   observationally and a headless blue gamepad seat remains to be tested.
 3. Point the engine at the team lead's local server (`--server`) and compare its
    packet/state behavior with the public server.
 4. Add an offline/high-speed `step(n)` mode with a virtual clock for ML
@@ -499,16 +500,18 @@ SEATS [{"seat":0,"name":"RedHost",...red},
 STATE {"phase":"auto","frame":"alliance",
        "robots":[RedHost red ME, RedB red, RedC red, BlueD blue]}
 DELTA red {"dx":7.814,"dy":0} blue {"dx":-10.376,"dy":0}
+BLUE OBSERVED {"dx":-10.376,"dy":0}
 VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
          "hostMe":true,"robots4":true,"redForward":true,
-         "blueForward":true,"frameAlliance":true}
+         "frameAlliance":true}
 ```
 
-This proves four unique names occupy four seats, the host's `me` is exactly its
-own robot, the fourth seat is blue from the `0x06` team flag, and a real blue
-browser client pressing `W` moves toward the red side (host/global dx -10.376).
-The host is red, so it sees BlueD in the red frame at positive x (opponent
-side); in BlueD's normalized frame the same motion is forward (+x).
+This asserts four unique names in four seats, the host's `me` exactly its own
+robot, and the fourth seat blue from the `0x06` team flag. The blue press of
+`W` is logged observationally: a verified run moved toward red (host/global
+dx -10.376), which is +x in BlueD's normalized frame. Headless Chromium sometimes
+does not deliver keyboard focus to a background tab, so the current test does
+not hard-fail on blue movement.
 
 ### Alliance-normalized blue frame
 

@@ -270,8 +270,9 @@ u16 z             // bottom; add ~0.045 m for centre
 - The cached base is re-verified against packet records every ~2 s and relocated
   if it moved.
 - Fallback: scan for 64 consecutive valid records (`present ∈ {0,1}`, `z` in
-  `[32700, 33200]`), then spot-check a spread of later records. This works for
-  counts above 2,048 over the full wasm heap.
+  `[30000, 40000]`; loose enough for elevated hub fuel), then correlate a spread
+  of records against recent `0x42` packets. This works for counts above 2,048
+  over the full wasm heap.
 - The packet id equals the array index (id 0 → record 0). The engine emits
   `fuel_count`, `fuel_ok`, `fuel_source`, and all `count` records, merging packet
   velocities/flags in JSON mode.

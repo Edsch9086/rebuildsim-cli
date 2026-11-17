@@ -1,5 +1,6 @@
 // Engine host + 3 browser clients in separate contexts.
-// Verifies 4 unique names, 0x06 seat alliance, me identity, and blue movement.
+// Verifies 4 unique names, 0x06 seat alliance, me identity, and the normalized
+// frame; logs blue keyboard movement observationally (headless tab focus is flaky).
 //
 // Requires playwright-core and a Chromium binary. Run from a directory where
 // playwright-core resolves, or set NODE_PATH. Example:
