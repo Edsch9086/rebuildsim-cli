@@ -34,7 +34,7 @@ S→C  32 ...                   // room list chunks (312–611 bytes)
 ### 1.3 Name and room join
 
 ```
-C→S  10 <24-byte name>        // set display name
+C→S  10 <24-byte name>        // set display name (client truncates to 10 chars)
 C→S  04                       // ack / continue
 S→C  06 <variable, ~306+ bytes room state>
 S→C  13 <90–175 bytes>        // room info / join result

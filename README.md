@@ -43,7 +43,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
-| Robot identity | ✅ `me` + `is_me` by username |
+| Robot identity | ✅ `me` + `is_me` by username (1-10 ASCII) |
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); fourth seat blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |

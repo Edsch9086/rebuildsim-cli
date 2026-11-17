@@ -226,6 +226,8 @@ soon as the match clock starts; `field_reset` is the 3-second reset window.
 
 `state.me` and `Robot.is_me` are authoritative. `me` is matched against the CLI
 username in the live player state; alliance comes from the `0x06` seat record.
+Display names are limited to **10 printable ASCII characters** by the client; the
+engine rejects longer names rather than letting the seat name be truncated.
 In a six-robot lobby, always read `me` rather than indexing `robots[0]` or
 guessing by team.
 
