@@ -4,12 +4,11 @@ const fs = require('node:fs');
 const { parseRoom06 } = require('./room06.cjs');
 
 // Synthetic room state: 4 player records, seats 0-2 red, seat 3 blue.
-function rec(team, name) {
+function rec(team, name, robotId = 359) {
   const b = Buffer.alloc(8 + 24);
   b[0] = 1;
   b[1] = team;
-  b[2] = 0x67;
-  b[3] = 1;
+  b.writeUInt16LE(robotId, 2);
   b[4] = 2;
   b[7] = name.length;
   b.write(name, 8, 'utf8');
@@ -17,7 +16,8 @@ function rec(team, name) {
 }
 const header = Buffer.alloc(64);
 header.write('06ABCDE', 0, 'latin1');
-const synthetic = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1'), rec(0, 'Red2'), rec(1, 'BlueCap'), rec(0, 'RedFour')]);
+const synthetic = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1', 4414),
+  rec(0, 'Red2'), rec(1, 'BlueCap'), rec(0, 'RedFour')]);
 const parsed = parseRoom06(synthetic);
 assert.deepStrictEqual(
   parsed.seats.map((s) => [s.seat, s.name, s.alliance]),
@@ -27,6 +27,8 @@ assert.deepStrictEqual(
 console.log('synthetic:', JSON.stringify(parsed.seats));
 assert.strictEqual(parsed.seats[4].team_flag, 0);
 assert.strictEqual(parsed.seats[4].alliance, 'red', 'explicit red flag at index >= 3 must stay red');
+assert.strictEqual(parsed.seats[0].robot_id, 359);
+assert.strictEqual(parsed.seats[1].robot_id, 4414, 'non-default robot id must parse');
 
 // Captured 4-player packet from a live lobby (all names were Host4 because the
 // browser tabs shared a name; the seat/alliance layout is what matters).

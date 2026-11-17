@@ -263,6 +263,9 @@ pub struct Input {
 pub struct Seat {
     pub seat: u32,
     pub name: String,
+    /// Robot/team id from the 0x06 record (359 in the default robot).
+    #[serde(default)]
+    pub robot_id: u16,
     #[serde(default)]
     pub team_flag: u8,
     pub alliance: String,

@@ -1,10 +1,12 @@
 // Minimal room-state (0x06) seat parser.
 //
 // Observed player record:
-//   01 <team> 67 01 02 00 00 <name-len> <name...>
+//   01 <team> <robot-id u16> 02 00 00 <name-len> <name...>
 //
 // `<team>` is 0 for red seats and 1 for blue seats (verified with a 4-player
 // room: seats 0-2 flag 0, seat 3 flag 1, and the seat-3 client rendered blue).
+// The two bytes after the team flag are the robot/team id, e.g. `67 01` = 359
+// in the default robot. Do not hardcode 359; a different robot changes it.
 // Player records appear in room seat order; in a fresh room the first three
 // seats are red (captain, red 1, red 2) and the next three are blue (captain,
 // blue 1, blue 2). Spectator records use a different signature and are skipped.
@@ -17,8 +19,9 @@ function parseRoom06(buf) {
   const seats = [];
   for (let i = 64; i + 9 <= buf.length && seats.length < 6; i++) {
     if (buf[i] !== 1) continue;
-    if (buf[i + 2] !== 0x67) continue;
-    if (buf[i + 3] !== 1 || buf[i + 4] !== 2 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
+    // i+2/i+3 are a variable robot/team id (359 = 67 01 in the default robot).
+    if (buf[i + 4] !== 2 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
+    const robotId = buf.readUInt16LE(i + 2);
     const len = buf[i + 7];
     if (len < 1 || len > 24) continue;
     if (i + 8 + len > buf.length) continue;
@@ -30,6 +33,7 @@ function parseRoom06(buf) {
     seats.push({
       seat,
       name,
+      robot_id: robotId,
       team_flag: teamFlag,
       alliance: teamFlag === 1 ? 'blue' : 'red',
     });

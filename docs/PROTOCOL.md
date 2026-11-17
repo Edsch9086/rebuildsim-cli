@@ -48,6 +48,7 @@ C→S 10 50 72 6f 62 65 42 6f 74 00 ...     // "ProbeBot"
 C→S 04
 S→C 06 41 57 33 56 51 ...                 // room AW3VQ
 C→S 07 00 00 67 01 00 00 01 16 62 c2 95 00 80
+                    ^^^^^ robot/team id 359
 ```
 
 The `0x06` room state contains the room code, host id, seats, display names,
@@ -55,10 +56,12 @@ teams, robot ids, and spawn selections. Player records appear in **seat order**
 and have this signature:
 
 ```
-01 <team> 67 01 02 00 00 <name-len> <name...>
+01 <team> <robot-id u16> 02 00 00 <name-len> <name...>
 ```
 
-`<team>` is `0` for red and `1` for blue. A fresh 4-player room was captured as
+`<team>` is `0` for red and `1` for blue. `<robot-id>` is the robot/team id
+(`67 01` = 359 in the default robot; it changes when another robot is selected).
+A fresh 4-player room was captured as
 seats 0–2 red (`team=0`) and seat 3 blue (`team=1`), matching the blue client's
 HUD. The engine parses this with `engine/room06.cjs` and exposes `seats` plus
 per-robot `alliance_source: "room"`. The team byte is authoritative; there is no

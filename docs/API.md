@@ -252,7 +252,7 @@ Engine → CLI:
 {"type":"ready","build":"b654373","binary":false}
 {"type":"protocol","version":1}
 {"type":"seats","code":"ABCDE","seats":[
-  {"seat":0,"name":"MyBot","team_flag":0,"alliance":"red"}]}
+  {"seat":0,"name":"MyBot","robot_id":359,"team_flag":0,"alliance":"red"}]}
 {"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
 {"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
 {"type":"score","seq":42,"red":7,"blue":4,"auto_red":3,"auto_blue":2}

@@ -189,8 +189,9 @@ failure mode. A `stale` fallback reuses the last pose for up to 2 s and sets
 exit 8 because name-keyed identity cannot distinguish them.
 
 Alliance is decoded from the `0x06` room state. Player records appear in seat
-order with the signature `01 <team> 67 01 02 00 00 <name-len> <name...>`;
-`<team>` is 0 for red and 1 for blue. A fresh 4-player capture had seats 0–2 red
+order with the signature `01 <team> <robot-id u16> 02 00 00 <name-len> <name...>`;
+`<team>` is 0 for red and 1 for blue, and the robot id is 359 (`67 01`) for the
+default robot. A fresh 4-player capture had seats 0–2 red
 and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
