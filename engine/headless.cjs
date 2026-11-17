@@ -317,7 +317,7 @@ let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = fa
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
-let roomEntryAt = 0, matchStartedAt = 0;
+let matchStartedAt = 0, shrinkKey = null;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -398,9 +398,10 @@ function resetMatchState() {
   readyClicked = false;
   startClicked = false;
   lastReadyClickAt = 0;
-  roomEntryAt = Date.now();
   matchWasActive = false;
   matchStartedAt = 0;
+  shrinkKey = null;
+  for (const s of roomSeats) s.ready = null;
   lastRoomKey = '';
   if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
   if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
@@ -463,6 +464,7 @@ function noteSeatPresence(ours) {
 
 function clearRoomIdentity() {
   fuelApplied = false;
+  shrinkKey = null;
   roomSeats = [];
   roomNames = new Set();
   allianceByName.clear();
@@ -490,9 +492,22 @@ function applyRoom06(buf) {
       noteSeatPresence(false);
       return false;
     }
-    if (matchStarted && parsed.seats.length < roomSeats.length) {
-      log('room state lost seats during a match; keeping last good seat list');
-      return false;
+    if (parsed.seats.length < roomSeats.length) {
+      if (matchStarted) {
+        log('room state lost seats during a match; keeping last good seat list');
+        return false;
+      }
+      // Accept a genuine departure only after the same smaller snapshot is
+      // seen twice; a single partial parse must not shrink the seat list.
+      const key = parsed.seats.map(s => s.name).join(',');
+      if (shrinkKey !== key) {
+        shrinkKey = key;
+        log('room snapshot shrank; waiting for confirmation');
+        return false;
+      }
+      shrinkKey = null;
+    } else {
+      shrinkKey = null;
     }
   }
   roomSeats = parsed.seats;
@@ -544,20 +559,12 @@ function applyRoom06(buf) {
       emitRoom();
     }
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
-    if (ourSeat && ourSeat.ready === true) {
-      readyClicked = true;
-    } else if (ourSeat && ourSeat.ready === false && !matchStarted && !uiBusy
-        && Date.now() - lastReadyClickAt > 4000) {
-      // 0 = not ready, 1 = ready. Click once, then retry only while the bit
-      // stays 0; never toggle a ready seat off.
-      lastReadyClickAt = Date.now();
-      readyClicked = true;
-      uiLater(() => {
-        const s = roomSeats.find(x => x.name === OPT.username);
-        if (s && s.ready === false && !matchStarted && !uiBusy) {
-          globalThis.__ctl.click(646, 688);
-        }
-      }, 300);
+    if (ourSeat && ourSeat.ready === true) readyClicked = true;
+    readyIfNeeded();
+    if (host && OPT.start && !startClicked && !matchStarted && !uiBusy
+        && roomSeats.length && roomSeats.every(s => s.ready === true)) {
+      startClicked = true;
+      uiLater(() => clickStartWhenReady(0), 1000);
     }
   }
   return true;
@@ -630,7 +637,11 @@ function handleServerFrame(buf, wsId) {
     }
     // room state: room code at 1..5, then seat records in seat order.
     const nextCode = buf.subarray(1, 6).toString('latin1').trim().toUpperCase();
-    if (roomCode && nextCode && nextCode !== roomCode) {
+    if (!/^[A-Z0-9]{5}$/.test(nextCode)) {
+      log('ignoring room packet with malformed code');
+      return;
+    }
+    if (roomCode && nextCode !== roomCode) {
       log('room code changed', roomCode, '->', nextCode);
       clearRoomIdentity();
       lastRoom06 = null;
@@ -1416,9 +1427,30 @@ function tapBox(index, x, y, text) {
   } catch (e) { log('text box error', String(e)); }
 }
 
+function readyIfNeeded() {
+  if (matchStarted || uiBusy) return;
+  const seat = roomSeats.find(s => s.name === OPT.username);
+  if (!seat || seat.ready !== false) return;
+  if (Date.now() - lastReadyClickAt < 4000) return;
+  lastReadyClickAt = Date.now();
+  readyClicked = true;
+  uiLater(() => {
+    const cur = roomSeats.find(s => s.name === OPT.username);
+    if (cur && cur.ready === false && !matchStarted && !uiBusy) {
+      globalThis.__ctl.click(646, 688);
+    } else if (uiBusy) {
+      lastReadyClickAt = 0;
+    }
+  }, 300);
+}
+
 function clickStartWhenReady(attempt = 0, force = false) {
   if (!host) return;
   if (!force && !OPT.start) return;
+  if (uiBusy) {
+    uiLater(() => clickStartWhenReady(attempt, force), 500);
+    return;
+  }
   const allReady = roomSeats.length > 0 && roomSeats.every(s => s.ready === true);
   if (allReady) {
     globalThis.__ctl.click(1150, 688);
@@ -1475,8 +1507,7 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
-      roomEntryAt = Date.now();
-      // A room screen normally means the previous match ended or was left.
+          // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
       const starting = flow.match && !clockStarted && matchStartedAt
@@ -1532,8 +1563,7 @@ function onTrack(name, params) {
   if (name === 'room_join') {
     const previousRole = role;
     flow.joined = true;
-    roomEntryAt = Date.now();
-    host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
+      host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
     role = p.role;
     roomCode = (roomCode || OPT.code).toUpperCase();
@@ -1543,6 +1573,7 @@ function onTrack(name, params) {
     }
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emitRoom();
+    if (lastRoom06) applyRoom06(lastRoom06);
     if (!seated) {
       failSpectator(`room_join role=${p.role}`);
       return;
@@ -1556,8 +1587,9 @@ function onTrack(name, params) {
     };
     if (host && OPT.fuel && !fuelApplied) {
       fuelApplied = true;
-      uiBusy = true;
-      // Room settings > Rules > Fuel count. 720p coordinates.
+      // Room settings > Rules > Fuel count. 720p coordinates. The ready
+      // click scheduled above fires at 300 ms, before this dialog opens at
+      // 500 ms, so uiBusy is set there rather than here.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
       if (raw === 'max' || raw === 'full') { log('--fuel max is not supported; use an explicit percentage'); clicks = 0; }
@@ -1567,13 +1599,13 @@ function onTrack(name, params) {
         else if (pct < 100) { clicks = Math.round((100 - pct) / 25); dir = -1; }
         else if (pct > 100) { clicks = Math.round((pct - 100) / 25); dir = 1; }
       }
-      uiLater(() => globalThis.__ctl.click(752, 118), 500);   // room settings
+      uiLater(() => { uiBusy = true; globalThis.__ctl.click(752, 118); }, 500);   // room settings
       uiLater(() => globalThis.__ctl.click(794, 118), 1000);  // rules tab
       for (let i = 0; i < clicks; i++) {
         uiLater(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
       }
       uiLater(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
-      uiLater(() => { uiBusy = false; readyAndStart(); }, 1500 + clicks * 250 + 1000);
+      uiLater(() => { uiBusy = false; readyIfNeeded(); readyAndStart(); }, 1500 + clicks * 250 + 1000);
       log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
     } else {
       readyAndStart();
