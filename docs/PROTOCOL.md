@@ -12,14 +12,15 @@ an official spec; the server/client may change without notice.
 ### 1.1 Hello (C→S, 67 bytes)
 
 ```
-01 6c 00 00 00  44 55 42 52  34 61 38 61 30 65 38  00 ... 00  04
+01 6c 00 00 00  44 55 42 52  62 36 35 34 33 37 33  00 ... 00
 ^  ^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
 |  u32 108?     "DUBR"       build hash "b654373"
 type
 ```
 
-The rest is zero padding and a final `04`. The real engine sends this for you;
-a native client should copy the current build hash from the page.
+The rest is zero padding; the b654373 hello ends in zero bytes, not a trailing
+`04`. The real engine sends this for you; a native client should copy the
+current build hash from the page.
 
 ### 1.2 Handshake responses
 
@@ -82,9 +83,9 @@ The `0x07` seats the joining player; the last `00 80` is part of the selection
 u8  0x40
 u16 tick
 u16 reserved (observed 0)
-i16 axis1        // left stick X / strafe; 0x8000 neutral
-i16 axis2        // left stick Y / forward; 0x8000 neutral
-i16 axis3        // right stick X / turn; 0x8000 neutral
+i16 axis1        // forward/back; -1 = full forward, 0x8000 neutral
+i16 axis2        // left/right strafe; 0x8000 neutral
+i16 axis3        // turn; 0x8000 neutral
 u8  actions      // action bitfield
 ```
 
@@ -94,7 +95,7 @@ Neutral:
 40 0d 00 00 00 00 80 00 80 00 80 34
 ```
 
-W held (`axis1` = +1):
+W held (`axis1` = -1, full forward):
 
 ```
 40 8d 0c 00 00 ff ff 00 80 00 80 34
@@ -137,7 +138,8 @@ u16  48         // records in this packet
 
 The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
 96, ... and wraps). It sends chunks continuously; the full set refreshes in
-~0.3 s at 30 Hz. The total count is **not fixed**: staged fuel can range from
+~0.3 s for the default 456 records and scales as `ceil(total/48)/30` seconds
+(~3 s at 4,300). The total count is **not fixed**: staged fuel can range from
 ~135 to ~4,300. Example first record:
 
 ```

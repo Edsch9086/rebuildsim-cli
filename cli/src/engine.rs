@@ -62,7 +62,7 @@ pub struct Robot {
     pub name: String,
     #[serde(default)]
     pub is_me: bool,
-    #[serde(default)]
+    #[serde(default = "default_unknown")]
     pub alliance: String,
     /// "room" when decoded from the 0x06 seat records, "spawn" for the fallback.
     #[serde(default)]
@@ -172,6 +172,10 @@ fn default_frame() -> String {
     "unknown".to_string()
 }
 
+fn default_unknown() -> String {
+    "unknown".to_string()
+}
+
 fn deserialize_alliance<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: serde::Deserializer<'de>,
@@ -223,7 +227,7 @@ pub struct GameState {
     #[serde(default = "default_frame")]
     pub frame: String,
     /// Our alliance for diagnostics; bots should not need it in alliance frame.
-    #[serde(default, deserialize_with = "deserialize_alliance")]
+    #[serde(default = "default_unknown", deserialize_with = "deserialize_alliance")]
     pub alliance: String,
     /// Our robot's hopper fuel count, if the player struct is readable.
     #[serde(default)]
@@ -543,6 +547,7 @@ fn validate_option_value(name: &str, value: &str) -> std::io::Result<()> {
 
 fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
     if opts.username.is_empty()
+        || opts.username != opts.username.trim()
         || opts.username.len() > 10
         || opts.username.starts_with('-')
         || !opts.username.bytes().all(|b| (0x20..=0x7e).contains(&b))
@@ -565,11 +570,26 @@ fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
     }
     if let Some(fuel) = &opts.fuel {
         validate_option_value("fuel", fuel)?;
+        let normalized = fuel.strip_suffix('%').unwrap_or(fuel);
+        if !["25", "50", "75", "100", "125", "150"].contains(&normalized) {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "fuel must be one of 25, 50, 75, 100, 125, 150",
+            ));
+        }
     }
     if let Some(server) = &opts.server {
         validate_option_value("server", server)?;
-        let bracketed = server.starts_with('[') && server.contains("]:");
-        if !bracketed && server.matches(':').count() != 1 {
+        let (host, port) = if server.starts_with('[') && server.contains("]:") {
+            let split = server.rfind("]:").unwrap();
+            (&server[1..split], &server[split + 2..])
+        } else if server.matches(':').count() == 1 {
+            let (h, p) = server.split_once(':').unwrap();
+            (h, p)
+        } else {
+            ("", "")
+        };
+        if host.is_empty() || port.parse::<u16>().map(|p| p == 0).unwrap_or(true) {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "server must be HOST:PORT (bracket IPv6 as [addr]:port)",
@@ -581,6 +601,24 @@ fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
     }
     if let Some(hub) = &opts.hub_order {
         validate_option_value("hub-order", hub)?;
+        if !matches!(hub.as_str(), "red" | "blue" | "r" | "b" | "R" | "B") {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "hub-order must be red or blue",
+            ));
+        }
+    }
+    if opts.code.is_none() && !opts.create {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "pass code or create in EngineOptions",
+        ));
+    }
+    if opts.code.is_some() && opts.create {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "code and create are mutually exclusive",
+        ));
     }
     Ok(())
 }
@@ -898,6 +936,7 @@ mod tests {
     #[test]
     fn rejects_flag_like_forwarded_values() {
         let mut opts = EngineOptions::new("engine.cjs", "Bot");
+        opts.code = Some("ABCDE".into());
         opts.server = Some("--no-build-check".into());
         assert!(validate_options(&opts).is_err());
         opts.server = Some("localhost:8080".into());
@@ -905,8 +944,26 @@ mod tests {
         opts.username = "--binary".into();
         assert!(validate_options(&opts).is_err());
         opts.username = "Bot".into();
-        opts.code = Some("ABCDE".into());
+        opts.server = Some("host:".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = None;
+        opts.hub_order = Some("Red".into());
+        assert!(validate_options(&opts).is_err());
+        opts.hub_order = Some("red".into());
         assert!(validate_options(&opts).is_ok());
+    }
+
+    #[test]
+    fn missing_identity_fields_default_to_unknown() {
+        let state: GameState =
+            serde_json::from_str(r#"{"seq":1,"t":0,"phase":"auto","substage":"auto"}"#)
+                .expect("partial state");
+        assert_eq!(state.alliance, "unknown");
+        assert_eq!(state.frame, "unknown");
+        let robot: Robot =
+            serde_json::from_str(r#"{"name":"x","x":0.0,"y":0.0,"z":0.0,"heading":0.0}"#)
+                .expect("partial robot");
+        assert_eq!(robot.alliance, "unknown");
     }
 
     #[test]

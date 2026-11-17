@@ -387,8 +387,17 @@ fn main() {
     let mut last_state = Instant::now();
     let mut last_heartbeat = Instant::now();
     let mut match_seen = false;
+    let mut fatal_error = false;
+    let mut spectator_pending: Option<Instant> = None;
 
     loop {
+        if let Some(t) = spectator_pending {
+            if t.elapsed() > Duration::from_secs(1) {
+                eprintln!("no driver seat after room update; exiting");
+                engine.shutdown(Duration::from_secs(1));
+                std::process::exit(7);
+            }
+        }
         if !ready_seen && started_at.elapsed() > Duration::from_secs(30) {
             eprintln!("engine did not become ready within 30s; exiting");
             engine.shutdown(Duration::from_secs(1));
@@ -426,6 +435,7 @@ fn main() {
                 ready_seen = true;
                 join_started = Some(Instant::now());
                 last_heartbeat = Instant::now();
+                fatal_error = false;
             }
             Ok(Some(EngineEvent::Room {
                 code,
@@ -440,7 +450,6 @@ fn main() {
                     role.unwrap_or_else(|| "?".into())
                 );
                 print_seats(&seats);
-                let first_join = !joined;
                 joined = true;
                 join_started = None;
                 last_heartbeat = Instant::now();
@@ -456,12 +465,10 @@ fn main() {
                     last_state = Instant::now();
                 }
                 if !seated {
-                    if first_join {
-                        eprintln!("joined as a spectator; this bot cannot drive");
-                        engine.shutdown(Duration::from_secs(1));
-                        std::process::exit(7);
-                    }
-                    eprintln!("room update reports no driver seat; waiting for engine outcome");
+                    eprintln!("room reports no driver seat; waiting for engine outcome");
+                    spectator_pending = Some(Instant::now());
+                } else {
+                    spectator_pending = None;
                 }
             }
             Ok(Some(EngineEvent::Seats { code, seats })) => {
@@ -477,6 +484,7 @@ fn main() {
             })) => {
                 println!("match started phase={phase} substage={substage} time={time:?}");
                 print_seats(&seats);
+                spectator_pending = None;
                 in_match = true;
                 match_seen = true;
                 restarts = 0;
@@ -542,6 +550,21 @@ fn main() {
                 detail,
                 extra,
             })) => {
+                if error == "match_clock_stalled" {
+                    eprintln!("engine reported a stalled match clock; exiting");
+                    engine.shutdown(Duration::from_secs(1));
+                    std::process::exit(5);
+                }
+                if matches!(
+                    error.as_str(),
+                    "memory_unavailable"
+                        | "game_boot_failed"
+                        | "build_drift"
+                        | "asset_hash_mismatch"
+                        | "protocol_mismatch"
+                ) {
+                    fatal_error = true;
+                }
                 let extra = if extra.is_empty() {
                     String::new()
                 } else {
@@ -550,7 +573,7 @@ fn main() {
                 eprintln!(
                     "engine error: {error}{}{extra}",
                     detail
-                        .filter(|d| !d.is_empty())
+                        .filter(|d| !d.trim().is_empty())
                         .map(|d| format!(" ({d})"))
                         .unwrap_or_default()
                 );
@@ -573,7 +596,12 @@ fn main() {
                         "room WebSocket closed; exiting (use --allow-ws-close to keep running)"
                     );
                     engine.shutdown(Duration::from_secs(1));
-                    if args.restart_on_exit && args.code.is_some() && !in_match && !match_seen {
+                    if args.restart_on_exit
+                        && args.code.is_some()
+                        && !in_match
+                        && !match_seen
+                        && !fatal_error
+                    {
                         if let Some(new_engine) =
                             restart_engine(&opts, &mut restarts, args.max_restarts)
                         {
@@ -584,6 +612,8 @@ fn main() {
                             joined = false;
                             ready_seen = false;
                             join_started = None;
+                            fatal_error = false;
+                            spectator_pending = None;
                             started_at = Instant::now();
                             last_state = Instant::now();
                             last_heartbeat = Instant::now();
@@ -606,6 +636,7 @@ fn main() {
                     && args.code.is_some()
                     && !in_match
                     && !match_seen
+                    && !fatal_error
                     && matches!(code, Some(1));
                 if retryable {
                     if let Some(new_engine) =
@@ -618,6 +649,8 @@ fn main() {
                         joined = false;
                         ready_seen = false;
                         join_started = None;
+                        fatal_error = false;
+                        spectator_pending = None;
                         started_at = Instant::now();
                         last_state = Instant::now();
                         last_heartbeat = Instant::now();

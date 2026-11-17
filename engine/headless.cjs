@@ -693,7 +693,7 @@ globalThis.WebSocket = class extends NativeWS {
     });
     this.addEventListener('open', () => {
       wsOpen++;
-      if (wsOpen === 2 && !roomSocketId) roomSocketId = id;
+      if (id === 2 && !roomSocketId) roomSocketId = id;
       if (globalThis.__RB_DEBUG) log('WS open', id, url);
       emit({ type: 'ws', state: 'open', id, url });
     });

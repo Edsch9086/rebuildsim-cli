@@ -191,8 +191,8 @@ exit 8 because name-keyed identity cannot distinguish them.
 Alliance is decoded from the `0x06` room state. Player records appear in seat
 order with the signature `01 <team> <robot-id u16> 02 00 00 <name-len> <name...>`;
 `<team>` is 0 for red and 1 for blue, and the robot id is 359 (`67 01`) for the
-default robot. The client truncates display names to 10 characters, so use
-1-10 ASCII characters; longer `--username` values will not match the seat. A fresh 4-player capture had seats 0–2 red
+default robot. The client displays at most 10 characters and the engine rejects
+longer names before joining; use 1-10 ASCII characters. A fresh 4-player capture had seats 0–2 red
 and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
@@ -309,8 +309,8 @@ The headless engine drives the game with synthetic DOM events:
   Click only while that bit is 0 (the engine does this) so an already-ready seat
   is not toggled off. The host's start flow may still show "N players are not
   ready" → `START ANYWAY`.
-- Joining a room whose match is already running puts you in as a **spectator**
-  (`via: joined_running`); join before start to drive.
+- Joining a room whose match is already running puts you in as a **spectator**;
+  join before start to drive.
 
 The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game lays out
 differently at 1280×800. Use 720p for the headless engine.

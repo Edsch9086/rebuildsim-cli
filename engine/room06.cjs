@@ -32,9 +32,10 @@ function parseRoom06(buf) {
     if (!name || /[\x00-\x1f]/.test(name) || name.includes('\ufffd')) continue;
     const teamFlag = buf[i + 1];
     if (teamFlag > 1) continue;
-    // The per-seat ready flag follows the `00 80 ff ff` marker after the
-    // 16-byte name field: 0 = not ready, 1 = ready (verified live). The marker's
-    // second byte is 0x80 for red and 0x00 for blue.
+    // The per-seat ready byte follows padding, a 4-byte value, and a 4-byte
+    // field ending in ff ff. That field varies by seat (00 80 ff ff for red;
+    // blue has been seen with both 00 00 ff ff and ff ff ff ff). The ready
+    // byte is 0 = not ready, 1 = ready (verified live).
     let ready = null;
     // Marker: 00 80 ff ff for red seats, 00 00 ff ff for blue seats;
     // the ready byte follows it (0 = not ready, 1 = ready).
