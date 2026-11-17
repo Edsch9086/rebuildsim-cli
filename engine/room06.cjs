@@ -32,6 +32,18 @@ function parseRoom06(buf) {
     if (!name || /[\x00-\x1f]/.test(name) || name.includes('\ufffd')) continue;
     const teamFlag = buf[i + 1];
     if (teamFlag > 1) continue;
+    // The per-seat ready flag follows the `00 80 ff ff` marker after the
+    // 16-byte name field: 0 = ready, 1 = not ready (verified live).
+    let ready = null;
+    const marker = [0x00, 0x80, 0xff, 0xff];
+    const stop = Math.min(buf.length - 5, i + 8 + len + 40);
+    for (let q = i + 8 + len; q < stop; q++) {
+      if (buf[q] === marker[0] && buf[q + 1] === marker[1]
+          && buf[q + 2] === marker[2] && buf[q + 3] === marker[3]) {
+        ready = buf[q + 4] === 0;
+        break;
+      }
+    }
     const seat = seats.length;
     seats.push({
       seat,
@@ -39,6 +51,7 @@ function parseRoom06(buf) {
       robot_id: robotId,
       team_flag: teamFlag,
       alliance: teamFlag === 1 ? 'blue' : 'red',
+      ready,
     });
     i += 16 + len - 1;
   }

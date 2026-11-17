@@ -388,7 +388,7 @@ fn main() {
                 std::process::exit(5);
             }
         }
-        if ready_seen && last_heartbeat.elapsed() > Duration::from_secs(5) {
+        if ready_seen && last_heartbeat.elapsed() > Duration::from_secs(15) {
             eprintln!("heartbeat timeout: engine event loop is stalled; exiting");
             engine.shutdown(Duration::from_secs(1));
             std::process::exit(5);

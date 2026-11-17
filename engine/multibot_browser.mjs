@@ -92,9 +92,9 @@ const bots=[];
 for(const label of ['RedB','RedC','BlueD']){ console.log('loading',label); bots.push(await makeBot(label)); console.log('joined',label); await wait(700); }
 for(let t=0;t<100;t++){ await wait(100); if(seats && seats.length>=4) break; }
 console.log('HOST SEATS',JSON.stringify(seats));
-// Give the browser clients time to click READY after their room UI renders.
+// Joiners auto-ready; the host does not, so ready the host first.
 await wait(5000);
-await host.stdin.write('{"type":"ready"}\n'); await wait(900);
+await host.stdin.write('{"type":"ready"}\n'); await wait(1000);
 await host.stdin.write('{"type":"start"}\n');
 for(let t=0;t<200;t++){ await wait(100); if(lastState && lastState.robots.length>=4) break; }
 await wait(1500);

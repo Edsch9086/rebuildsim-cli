@@ -61,6 +61,10 @@ and have this signature:
 
 `<team>` is `0` for red and `1` for blue. `<robot-id>` is the robot/team id
 (`67 01` = 359 in the default robot; it changes when another robot is selected).
+The record is followed by a 16-byte name field, a `00 80 ff ff` marker, and a
+ready byte (`0` ready, `1` not ready). The host record has one extra byte before
+the marker; `engine/room06.cjs` locates the marker rather than assuming a fixed
+offset.
 A fresh 4-player room was captured as
 seats 0–2 red (`team=0`) and seat 3 blue (`team=1`), matching the blue client's
 HUD. The engine parses this with `engine/room06.cjs` and exposes `seats` plus

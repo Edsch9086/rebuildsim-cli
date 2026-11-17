@@ -313,6 +313,7 @@ let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
+let roomEntryAt = 0;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -392,6 +393,7 @@ function resetMatchState() {
   if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
   readyClicked = false;
   startClicked = false;
+  roomEntryAt = Date.now();
   matchWasActive = false;
   lastRoomKey = '';
   if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
@@ -522,8 +524,16 @@ function applyRoom06(buf) {
     if (!seated || role !== 'driver') {
       seated = true;
       role = 'driver';
-      readyClicked = true; // join auto-readies; do not toggle it off
       emitRoom();
+    }
+    const ourSeat = roomSeats.find(s => s.name === OPT.username);
+    if (ourSeat && ourSeat.ready === true) readyClicked = true;
+    if (ourSeat && ourSeat.ready === false && !host && !readyClicked && !uiBusy
+        && roomEntryAt && Date.now() - roomEntryAt > 3000) {
+      // Joiners auto-ready; on a rematch the flag can start false, so correct
+      // it exactly once. Never click a seat whose ready flag is already true.
+      readyClicked = true;
+      uiLater(() => globalThis.__ctl.click(646, 688), 700);
     }
   }
   return roomSeats;
@@ -1389,6 +1399,7 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
+      roomEntryAt = Date.now();
       // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
@@ -1407,11 +1418,14 @@ function onTrack(name, params) {
           }
         }, 1800);
       }
-      if (flow.joined && seated && !flow.match) {
-        readyClicked = true;
-        if (host && OPT.start && !startClicked) {
+      if (flow.joined && seated && !flow.match && host) {
+        if (!readyClicked) {
+          readyClicked = true;
+          uiLater(() => globalThis.__ctl.click(646, 688), 1000);
+        }
+        if (OPT.start && !startClicked) {
           startClicked = true;
-          uiLater(() => globalThis.__ctl.click(1150, 688), 1000);
+          uiLater(() => globalThis.__ctl.click(1150, 688), 1900);
         }
       }
       if (OPT.debug) log('room screen');
@@ -1444,6 +1458,7 @@ function onTrack(name, params) {
   if (name === 'room_join') {
     const previousRole = role;
     flow.joined = true;
+    roomEntryAt = Date.now();
     host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
     role = p.role;
@@ -1458,14 +1473,19 @@ function onTrack(name, params) {
       failSpectator(`room_join role=${p.role}`);
       return;
     }
-    // Joining auto-readies the seat. Clicking READY again would toggle it OFF,
-    // so only the test-only host start is clicked here.
+    // Joiners auto-ready; the host does not, so click READY only for the host.
     const readyAndStart = () => {
-      readyClicked = true;
-      if (host && OPT.start && !startClicked) {
-        startClicked = true;
-        uiLater(() => globalThis.__ctl.click(1150, 688), 1000);
+      if (host) {
+        if (!readyClicked) {
+          readyClicked = true;
+          uiLater(() => globalThis.__ctl.click(646, 688), 900);
+        }
+        if (OPT.start && !startClicked) {
+          startClicked = true;
+          uiLater(() => globalThis.__ctl.click(1150, 688), 1800);
+        }
       }
+      // Joiners: applyRoom06 clicks only if the seat's ready flag is false.
     };
     if (host && OPT.fuel && !fuelApplied) {
       fuelApplied = true;
@@ -1627,6 +1647,12 @@ setInterval(() => {
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
   emit(state);
+  if (match.ended && flow.match) {
+    // Keep emitting the final/end states, but room events and the CLI should
+    // no longer consider this a live match.
+    flow.match = false;
+    log('match ended; room events now report match_active=false');
+  }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
 let trace = null;

@@ -269,6 +269,9 @@ pub struct Seat {
     #[serde(default)]
     pub team_flag: u8,
     pub alliance: String,
+    /// Per-seat ready flag from 0x06 (None if the marker was not found).
+    #[serde(default)]
+    pub ready: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]

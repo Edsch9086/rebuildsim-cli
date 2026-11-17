@@ -65,6 +65,7 @@ timeout variants provide a deadline.
 | `protocol` | server protocol version integer (`1` currently) |
 | `team_flag` | seat team enum: `0` red, `1` blue |
 | `seat` | zero-based record/seat-order index (normal rooms are seat order) |
+| `ready` | `true`/`false` from the 0x06 ready byte; `null` if not decoded |
 
 Notes:
 
@@ -257,7 +258,8 @@ Engine → CLI:
 {"type":"ready","build":"b654373","binary":false}
 {"type":"protocol","version":1}
 {"type":"seats","code":"ABCDE","seats":[
-  {"seat":0,"name":"MyBot","robot_id":359,"team_flag":0,"alliance":"red"}]}
+  {"seat":0,"name":"MyBot","robot_id":359,"team_flag":0,"alliance":"red",
+   "ready":false}]}
 {"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver",
  "match_active":false,"seats":[...]}
 {"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
