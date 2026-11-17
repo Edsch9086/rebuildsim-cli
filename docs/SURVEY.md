@@ -451,6 +451,19 @@ fails fast when the live `BUILD` differs.
    procedural bot team.
 
 
+### Rematch / results return
+
+A solo `--create --start` run played a full 163 s match, clicked
+`BACK TO THE ROOM` at `(365, 688)` after the results appeared, and started a
+second match about five seconds later:
+
+```
+MATCH 1 countdown
+ROOM active false      // results auto-return
+MATCH 2 countdown
+RESULT matches 2 states 384 ends 8 rooms 10
+```
+
 ## 12. Verification log
 
 These are the reproducible checks used for the current build (`b654373`).

@@ -366,9 +366,9 @@ The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 
 - `--spawnpoint` is deferred. The engine joins with the default seat and logs
   that the flag is ignored; a tuned bot can infer its spawn from `me`.
-- After a match the game stays on the results screen until a human continues.
-  The engine reserves the results screen for the human host; once the room
-  screen returns, it resets and readies for the next match.
+- After a match the engine clicks `BACK TO THE ROOM` after ~3.5 s (retry at
+  7.5 s), then resets and readies for the next match. A human can click earlier;
+  the pending result-screen click is canceled when the room view appears.
 - Blue control-frame inversion is implemented and the 4th seat is confirmed
   blue. The 4-client test asserts the four seats, host `me`, robot identities,
   and the normalized frame; it logs blue keyboard movement as observational
