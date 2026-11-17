@@ -26,6 +26,15 @@ assert.deepStrictEqual(
 );
 console.log('synthetic:', JSON.stringify(parsed.seats));
 
+// Synthetic 3v3 roster: seats 0-2 red, 3-5 blue.
+const sixSeat = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1'),
+  rec(0, 'Red2'), rec(1, 'BlueCap'), rec(1, 'Blue1'), rec(1, 'Blue2')]);
+const six = parseRoom06(sixSeat);
+assert.deepStrictEqual(six.seats.map(s => s.alliance),
+  ['red', 'red', 'red', 'blue', 'blue', 'blue']);
+assert.strictEqual(six.seats.length, 6);
+console.log('six-seat alliances:', six.seats.map(s => s.name + '=' + s.alliance).join(','));
+
 // Captured single-player 0x06 from build b654373 (309 bytes, one red AnchorBot).
 const capturedHex = '0655414c375100738fc5ad020200000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100670102000009416e63686f72426f7400000000000000001662c2950080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff000000000000ff000000';
 const captured = parseRoom06(Buffer.from(capturedHex, 'hex'));
