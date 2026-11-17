@@ -81,9 +81,11 @@ async function makeBot(label){
     joined=await p.evaluate(()=>!!window.__room06);
   }
   if(!joined) throw new Error(`${label}: join failed`);
-  // Joining auto-readies the seat. Wait for the room UI to settle, but do not
-  // click READY again: that toggles the seat back to NOT READY.
-  await p.waitForTimeout(1500);
+  // A seat starts NOT ready. Click READY exactly once after the room UI has
+  // rendered; a second click would toggle it back off.
+  await p.waitForTimeout(3000);
+  await p.mouse.click(646,688);
+  await p.waitForTimeout(700);
   await p.screenshot({path:path.join(OUT, `b4e_${label}_room.png`)});
   return {label,page:p,ctx};
 }
@@ -108,52 +110,21 @@ const afterRed=pose('RedHost');
 const blue=bots[2];
 const delta=(a,b)=>a&&b?{dx:+(b.x-a.x).toFixed(3),dy:+(b.y-a.y).toFixed(3)}:null;
 async function driveBlue() {
-  const start=pose('BlueD');
-  let after=start;
   await blue.page.bringToFront();
-  // Background tabs throttle rendering/RAF. Give the blue client time to
-  // process the match transition before sending input.
-  for(let i=0;i<25;i++){
-    const inMatch=await blue.page.evaluate(()=>window.__tracks.includes('match_start')).catch(()=>false);
-    if(inMatch) break;
-    await wait(200);
-  }
-  for(let attempt=0;attempt<3;attempt++){
-    await blue.page.bringToFront();
-    await wait(800);
-    // The join flow can leave focus in a hidden text box.
-    await blue.page.evaluate(()=>{ document.activeElement?.blur?.(); });
-    if(attempt===0){
-      await blue.page.mouse.click(640,400);
-      await blue.page.keyboard.down('w'); await wait(2500); await blue.page.keyboard.up('w');
-    } else if(attempt===1){
-      // Same virtual gamepad path the headless engine uses. y=1 -> axis 1 = -1.
-      await blue.page.evaluate(()=>{
-        const e=new Event('gamepadconnected'); e.gamepad=window.__rbPad;
-        window.dispatchEvent(e);
-        window.__rbPad.axes[1]=-1;
-        window.__rbPad.timestamp=performance.now();
-      });
-      await wait(2500);
-      await blue.page.evaluate(()=>{ window.__rbPad.axes[1]=0; window.__rbPad.timestamp=performance.now(); });
-    } else {
-      // Trusted-ish events on the canvas (window-targeted events break the
-      // game's Node.contains checks).
-      await blue.page.evaluate(()=>{
-        const c=document.querySelector('canvas');
-        if(!c) return;
-        c.setAttribute('tabindex','0'); c.focus?.();
-        const ev=(t)=>c.dispatchEvent(new KeyboardEvent(t,{key:'w',code:'KeyW',keyCode:87,which:87,bubbles:true}));
-        ev('keydown'); setTimeout(()=>ev('keyup'),2000);
-      });
-      await wait(2500);
-    }
-    await wait(500);
-    after=pose('BlueD');
-    if((delta(start,after)?.dx||0)<-0.5) break;
-  }
-  return after;
+  await wait(1000);
+  await blue.page.evaluate(()=>{
+    document.activeElement?.blur?.();
+    const c=document.querySelector('canvas');
+    if(c){ c.setAttribute('tabindex','0'); c.focus?.(); }
+  });
+  await blue.page.mouse.click(640,360);
+  await blue.page.keyboard.down('w');
+  await wait(2500);
+  await blue.page.keyboard.up('w');
+  await wait(600);
+  return pose('BlueD');
 }
+
 const afterBlue=await driveBlue();
 const blueTracks=await blue.page.evaluate(()=>window.__tracks.filter(n=>/match|room_join/.test(n))).catch(()=>[]);
 console.log('BLUE TRACKS',JSON.stringify(blueTracks));

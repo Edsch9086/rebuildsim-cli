@@ -61,10 +61,11 @@ and have this signature:
 
 `<team>` is `0` for red and `1` for blue. `<robot-id>` is the robot/team id
 (`67 01` = 359 in the default robot; it changes when another robot is selected).
-The record is followed by a 16-byte name field, a `00 80 ff ff` marker, and a
-ready byte (`0` ready, `1` not ready). The host record has one extra byte before
-the marker; `engine/room06.cjs` locates the marker rather than assuming a fixed
-offset.
+After the name, the record has padding, a 4-byte value, a 4-byte field ending
+in `ff ff`, and a ready byte (`0` = not ready, `1` = ready). The field's leading
+bytes vary by seat/alliance (`00 80 ff ff`, `00 00 ff ff`, or `ff ff ff ff`),
+and the host record is slightly longer, so locate the `ff ff` + ready-byte pair
+rather than assuming a fixed offset (`engine/room06.cjs` does this).
 A fresh 4-player room was captured as
 seats 0–2 red (`team=0`) and seat 3 blue (`team=1`), matching the blue client's
 HUD. The engine parses this with `engine/room06.cjs` and exposes `seats` plus
@@ -126,7 +127,7 @@ u32  tick
 u16  total fuel // 1..~4300 depending on gamerules
 u16  48         // records in this packet
 48 × 24 bytes:
-  u16 id        // 0..455, 1:1 with memory array index
+  u16 id        // 0..total-1, 1:1 with memory array index
   u16 count     // 1, or >1 for a cluster
   u32 0x00010000
   u32 flags     // 0 normal; 7 seen for a hub cluster

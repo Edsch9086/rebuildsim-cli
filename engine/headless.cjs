@@ -1409,7 +1409,7 @@ function tapBox(index, x, y, text) {
 function clickStartWhenReady(attempt = 0, force = false) {
   if (!host) return;
   if (!force && !OPT.start) return;
-  const allReady = roomSeats.length > 0 && roomSeats.every(s => s.ready !== false);
+  const allReady = roomSeats.length > 0 && roomSeats.every(s => s.ready === true);
   if (allReady || attempt >= 24) {
     globalThis.__ctl.click(1150, 688);
     return;
@@ -1473,11 +1473,6 @@ function onTrack(name, params) {
         }, 1800);
       }
       if (flow.joined && seated && !flow.match && !uiBusy) {
-        if (!readyClicked) {
-          readyClicked = true;
-          lastReadyClickAt = Date.now();
-          uiLater(() => globalThis.__ctl.click(646, 688), 1000);
-        }
         if (host && OPT.start && !startClicked) {
           startClicked = true;
           uiLater(() => clickStartWhenReady(0), 1800);
@@ -1529,11 +1524,7 @@ function onTrack(name, params) {
       return;
     }
     const readyAndStart = () => {
-      if (!readyClicked) {
-        readyClicked = true;
-        lastReadyClickAt = Date.now();
-        uiLater(() => globalThis.__ctl.click(646, 688), 900);
-      }
+      // applyRoom06 clicks READY only when our 0x06 ready bit is 0.
       if (host && OPT.start && !startClicked) {
         startClicked = true;
         uiLater(() => clickStartWhenReady(0), 1500);
@@ -1781,7 +1772,7 @@ rl.on('line', (line) => {
   else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') {
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
-    if (!ourSeat || ourSeat.ready !== true) {
+    if (ourSeat && ourSeat.ready === false) {
       readyClicked = true;
       lastReadyClickAt = Date.now();
       globalThis.__ctl.click(646, 688);

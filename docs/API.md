@@ -358,8 +358,9 @@ The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 - `--spawnpoint` is deferred. The engine joins with the default seat and logs
   that the flag is ignored; a tuned bot can infer its spawn from `me`.
 - Blue control-frame inversion is implemented and the 4th seat is confirmed
-  blue, but a blue drive-direction assertion needs a 4-client lobby (the public
-  per-IP limit blocks repeated 4-client runs).
+  blue. The 4-client browser test asserts real blue keyboard movement toward
+  the red side; a headless blue *gamepad* seat still needs the team server
+  (the public per-IP limit blocks a second engine).
 - Six-robot identity/team validation should be repeated on the team lead's
   local server; `me`/`is_me` and the `0x06` seat parser are the safety
   mechanisms.
