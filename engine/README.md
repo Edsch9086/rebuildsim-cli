@@ -41,7 +41,7 @@ Flags:
 --code <CODE>       join a room
 --username <NAME>   display name (1-10 ASCII; the game truncates longer names)
 --create            test-only: create a room
---start             test-only: if host, ready and start the match
+--start             test-only: if host, start the match (seats auto-ready on join)
 --spawn <S>         reserved; ignored (infer spawn from first pose)
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)

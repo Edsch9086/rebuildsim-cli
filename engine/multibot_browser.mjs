@@ -81,11 +81,9 @@ async function makeBot(label){
     joined=await p.evaluate(()=>!!window.__room06);
   }
   if(!joined) throw new Error(`${label}: join failed`);
-  // Center of the READY button; the room UI needs a moment to render after
-  // the join packet, especially for the last joiner.
-  await p.waitForTimeout(2500);
-  await p.mouse.click(794,688);
-  await p.waitForTimeout(600);
+  // Joining auto-readies the seat. Wait for the room UI to settle, but do not
+  // click READY again: that toggles the seat back to NOT READY.
+  await p.waitForTimeout(1500);
   await p.screenshot({path:path.join(OUT, `b4e_${label}_room.png`)});
   return {label,page:p,ctx};
 }

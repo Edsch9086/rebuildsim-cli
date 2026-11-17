@@ -522,10 +522,7 @@ function applyRoom06(buf) {
     if (!seated || role !== 'driver') {
       seated = true;
       role = 'driver';
-      if (!readyClicked && !uiBusy) {
-        readyClicked = true;
-        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
-      }
+      readyClicked = true; // join auto-readies; do not toggle it off
       emitRoom();
     }
   }
@@ -557,7 +554,7 @@ function parse41(buf) {
 
 function onMatchStart() {
   const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
-  const stale = flow.match && (!last41At || Date.now() - last41At > 1500);
+  const stale = flow.match && last41At && Date.now() - last41At > 1500;
   // Match start is idempotent per match: /multi/match and match_start both fire,
   // and a second call during the countdown must not wipe the first clock/fuel
   // packets. A new match after an ended/abandoned one (no /room screen) is allowed.
@@ -1410,12 +1407,11 @@ function onTrack(name, params) {
           }
         }, 1800);
       }
-      if (flow.joined && seated && !flow.match && !readyClicked && !uiBusy) {
+      if (flow.joined && seated && !flow.match) {
         readyClicked = true;
-        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
         if (host && OPT.start && !startClicked) {
           startClicked = true;
-          uiLater(() => globalThis.__ctl.click(1150, 688), 1900);
+          uiLater(() => globalThis.__ctl.click(1150, 688), 1000);
         }
       }
       if (OPT.debug) log('room screen');
@@ -1462,14 +1458,13 @@ function onTrack(name, params) {
       failSpectator(`room_join role=${p.role}`);
       return;
     }
+    // Joining auto-readies the seat. Clicking READY again would toggle it OFF,
+    // so only the test-only host start is clicked here.
     const readyAndStart = () => {
+      readyClicked = true;
       if (host && OPT.start && !startClicked) {
         startClicked = true;
-        uiLater(() => globalThis.__ctl.click(646, 688), 900);
-        uiLater(() => globalThis.__ctl.click(1150, 688), 1800);
-      } else if (seated && (!readyClicked || previousRole !== 'driver')) {
-        readyClicked = true;
-        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
+        uiLater(() => globalThis.__ctl.click(1150, 688), 1000);
       }
     };
     if (host && OPT.fuel && !fuelApplied) {
