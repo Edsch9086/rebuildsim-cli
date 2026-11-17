@@ -3,6 +3,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const nativeFetch = globalThis.fetch;
 const { parseRoom06 } = require('./room06.cjs');
+const { computeHub } = require('./hub.cjs');
 
 const W = 1280, H = 720;
 const store = new Map();
@@ -1082,6 +1083,7 @@ setInterval(() => {
   const phase = phaseFor(lastMatchTime);
   const substage = substageFor(lastMatchTime);
   const me = robots.find(r => r.is_me) || null;
+  const hub = computeHub(lastMatchTime, autoScores.red, autoScores.blue, activeAlliance());
   const s = seq++;
   const key = `${scores.red}:${scores.blue}`;
   if (key !== lastScoreKey) {
@@ -1104,6 +1106,7 @@ setInterval(() => {
     protocol: protocolVersion,
     frame: OPT.fieldFrame ? 'field' : 'alliance',
     alliance: activeAlliance(),
+    hub,
     hopper_fuel: me ? me.hopper_fuel : null,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };

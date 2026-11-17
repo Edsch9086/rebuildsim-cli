@@ -114,6 +114,21 @@ impl Robot {
     }
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HubStatus {
+    /// Our hub status. `None` during alliance shifts when AUTO was tied.
+    pub active: Option<bool>,
+    pub red_active: Option<bool>,
+    pub blue_active: Option<bool>,
+    /// True when red's hub is inactive in SHIFT 1 (red won AUTO).
+    pub red_inactive_first: Option<bool>,
+    /// "auto" | "field_reset" | "transition" | "shift1".."shift4" |
+    /// "endgame" | "end" | "unknown"
+    pub phase: String,
+    /// "auto_score" | "tie" | "unknown"
+    pub source: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Fuel {
     pub id: u16,
@@ -168,6 +183,8 @@ pub struct GameState {
     /// Our robot's hopper fuel count, if the player struct is readable.
     #[serde(default)]
     pub hopper_fuel: Option<u16>,
+    #[serde(default)]
+    pub hub: HubStatus,
     /// True when `fuel` was delivered on the binary channel (fuel is empty).
     #[serde(default)]
     pub fuel_bin: bool,

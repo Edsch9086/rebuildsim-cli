@@ -180,13 +180,19 @@ fn print_state(state: &GameState, username: &str) {
         .map(|t| format!("{t:.1}s"))
         .unwrap_or_else(|| "?".to_string());
     let fuel_count = state.fuel_count.unwrap_or(0);
+    let hub = match state.hub.active {
+        Some(true) => "hub=on",
+        Some(false) => "hub=off",
+        None => "hub=?",
+    };
     println!(
-        "state #{:<5} {:<10} t={:<7} score={}-{} robots={:<2} fuel={}/{} {}",
+        "state #{:<5} {:<10} t={:<7} score={}-{} {} robots={:<2} fuel={}/{} {}",
         state.seq,
         format!("{}/{}", state.phase, state.substage),
         time,
         state.red_score,
         state.blue_score,
+        hub,
         state.robots.len(),
         state.fuel.len(),
         fuel_count,

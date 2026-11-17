@@ -158,6 +158,12 @@ The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
   | 55 → 30 | shift 4 | 25 s |
   | 30 → 0 | endgame | 30 s |
 
+- **Hub status** is derived from the clock and the auto scores, following the
+  2026 rules: both active in AUTO/TRANSITION/END GAME, both inactive during the
+  3 s field reset, and one active during each alliance shift. The alliance that
+  scored more AUTO fuel is inactive in SHIFT 1; status alternates after that.
+  A tied AUTO is FMS-selected, so the engine reports `hub.active = null` during
+  shifts until that selection is known.
 - **Scores** (u16, verified against the HUD screenshots):
 
   ```

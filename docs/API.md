@@ -43,6 +43,7 @@ while let Some(state) = engine.next_state()? {
 | `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
 | `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
+| `hub.active` | `true`/`false` for our hub, `null` when AUTO was tied during a shift |
 | `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
 | `red_score`, `blue_score`, `auto_*` | game points as displayed on the HUD (integer) |
 | `Input.x` | left stick X, normalized `-1.0..1.0` (right positive) |
@@ -114,6 +115,34 @@ Verified substage boundaries (from a full HUD capture):
 
 `red_score`/`blue_score` are the live totals displayed on the HUD. The auto
 scores freeze when auto ends.
+
+### Hub status
+
+`GameState.hub` follows the REBUILT 2026 rules:
+
+- Both hubs active during AUTO, the TRANSITION SHIFT, and END GAME.
+- Both inactive during the 3-second field reset between AUTO and TELEOP.
+- During SHIFT 1–4, one hub is active. The alliance that scored more fuel in
+  AUTO has its hub **inactive in SHIFT 1**, then the status alternates each
+  shift.
+- A tied AUTO is decided by the FMS; the API reports `hub.active = null`,
+  `hub.red_active = null`, `hub.blue_active = null`, `source = "tie"` during
+  shifts. Outside shifts it still reports both active/inactive normally.
+
+```rust
+pub struct HubStatus {
+    pub active: Option<bool>,        // our hub; null on a tied AUTO shift
+    pub red_active: Option<bool>,
+    pub blue_active: Option<bool>,
+    pub red_inactive_first: Option<bool>,
+    pub phase: String,               // "auto" | "field_reset" | "transition" |
+                                     // "shift1".."shift4" | "endgame" | "end" | "unknown"
+    pub source: String,              // "auto_score" | "tie" | "unknown"
+}
+```
+
+`hub.active` is the field a bot should normally use; it is already normalized
+to our alliance, so the bot does not need to know red/blue.
 
 ### `Robot`
 

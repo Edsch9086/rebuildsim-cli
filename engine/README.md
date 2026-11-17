@@ -75,6 +75,9 @@ stdout is JSON lines only:
  "time_remaining":158.0,"substage_remaining":15.0,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "frame":"alliance","alliance":"red","fuel_count":456,
+ "hopper_fuel":8,
+ "hub":{"active":true,"red_active":true,"blue_active":true,
+        "red_inactive_first":null,"phase":"auto","source":"tie"},
  "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.4,
        "z":0,"heading":-1.18,"vx":0,"vy":0,"vz":0,"yawRate":0},
@@ -119,6 +122,7 @@ fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
 node room06_test.cjs
 node frame_test.cjs
 node hopper_test.cjs
+node hub_test.cjs
 RB_ASSET_DIR=engine/cache node binary_test.cjs
 ```
 
@@ -126,8 +130,10 @@ RB_ASSET_DIR=engine/cache node binary_test.cjs
 (seats 0–2 red, seat 3 blue). `frame_test.cjs` forces the blue output frame and
 checks that poses/fuel/heading rotate 180 degrees and that forward input reverses
 in normalized coordinates. `hopper_test.cjs` starts a 25% match and checks the
-hopper goes 8 -> 0 while shooting. `binary_test.cjs` creates a 25% fuel room and
-checks the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
+hopper goes 8 -> 0 while shooting. `hub_test.cjs` checks the AUTO-winner and
+shift-alternation rules plus the tied-AUTO unknown case. `binary_test.cjs`
+creates a 25% fuel room and checks the `RSB1` framing, packed 150-fuel frame,
+and `fuel_bin` state.
 
 `multibot_browser.mjs` is the optional 4-client identity/control test (engine
 host + three browser clients in separate contexts). It needs `playwright-core`
@@ -148,6 +154,11 @@ and a Chromium binary; see the header comment.
   global coordinates.
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
+- `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b). It starts
+  at 8 in the default build; the 55 capacity is not decoded yet.
+- `hub.active` is our hub (already alliance-normalized); `hub.red_active` /
+  `hub.blue_active` are diagnostics. A tied AUTO is reported as `null` during
+  shifts because the FMS picks the order.
 - `--spawn` is deferred; infer the spawn from `me`.
 - The CLI is normally a **joiner**: a human spectator hosts, bots join and
   auto-ready, and the human starts the match. `--create`/`--start` are for

@@ -46,6 +46,8 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); seat 4 blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
+| Hopper fuel | ✅ local hopper count (8 -> 0 while shooting) |
+| Hub active/inactive | ✅ computed from clock + AUTO winner; tie reports unknown |
 | Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |

@@ -504,6 +504,16 @@ spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
 as red. This is the behavior the API guarantees by default; `--field-frame`
 restores raw global coordinates.
 
+### Hub status
+
+The hub schedule is deterministic from the clock and the AUTO score winner
+(REBUILT 2026 rules): both hubs are active in AUTO, the transition, and endgame;
+both are inactive during the 3 s field reset; during shifts the AUTO winner's
+hub is inactive in SHIFT 1 and the status alternates. The engine exposes
+`hub.active` (our hub), `hub.red_active`/`hub.blue_active`, and the shift phase.
+A tied AUTO is an FMS coin flip; in that case the engine reports `null` for the
+shift status and `source: "tie"` rather than guessing.
+
 ### Hopper fuel
 
 The local hopper is a u32 at **name+0x4b** in the player struct (and the same
