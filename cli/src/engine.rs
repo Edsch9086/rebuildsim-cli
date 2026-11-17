@@ -284,6 +284,9 @@ pub enum EngineEvent {
         role: Option<String>,
         #[serde(default)]
         seats: Vec<Seat>,
+        /// Present in newer engines: true while a match is running.
+        #[serde(default)]
+        match_active: Option<bool>,
     },
     #[serde(rename = "seats")]
     Seats { code: String, seats: Vec<Seat> },
@@ -706,7 +709,8 @@ impl Engine {
         }
     }
 
-    /// Ask the engine to quit, wait up to `grace`, then kill it.
+    /// Close stdin (the engine runs with `--exit-on-stdin-close`), wait up to
+    /// `grace`, then kill it.
     pub fn shutdown(&mut self, grace: Duration) {
         // The engine is spawned with --exit-on-stdin-close, so dropping the
         // pipe is a non-blocking graceful shutdown even if its input pipe is full.
@@ -820,6 +824,25 @@ mod tests {
         out.extend_from_slice(&seq.to_le_bytes());
         out.extend_from_slice(payload);
         out
+    }
+
+    #[test]
+    fn room_match_active_is_optional() {
+        let active: EngineEvent = serde_json::from_str(
+            r#"{"type":"room","code":"ABCDE","host":false,"seated":true,"match_active":true}"#,
+        )
+        .expect("room with match_active");
+        match active {
+            EngineEvent::Room { match_active, .. } => assert_eq!(match_active, Some(true)),
+            other => panic!("expected room, got {other:?}"),
+        }
+        let legacy: EngineEvent =
+            serde_json::from_str(r#"{"type":"room","code":"ABCDE","host":false,"seated":true}"#)
+                .expect("legacy room");
+        match legacy {
+            EngineEvent::Room { match_active, .. } => assert_eq!(match_active, None),
+            other => panic!("expected room, got {other:?}"),
+        }
     }
 
     #[test]

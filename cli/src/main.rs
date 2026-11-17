@@ -95,7 +95,7 @@ OPTIONS:
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
   --keyboard          use digital keyboard controls instead of the virtual gamepad
-  --fuel <PCT>        host only: set the fuel-count rule (25, 50, 75, 100, 125, 150, ...)
+  --fuel <PCT>        host only: fuel rule (25, 50, 75, 100, 125, 150; % optional)
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -134,13 +134,19 @@ fn parse_args() -> Result<Args, String> {
             "--keyboard" => a.keyboard = true,
             "--fuel" => {
                 let value = it.next().ok_or("--fuel needs a value")?;
-                let normalized = value.trim_end_matches('%');
+                let normalized = value.strip_suffix('%').unwrap_or(&value);
                 if !["25", "50", "75", "100", "125", "150"].contains(&normalized) {
                     return Err("--fuel must be one of 25, 50, 75, 100, 125, 150".into());
                 }
                 a.fuel = Some(normalized.to_string());
             }
-            "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
+            "--server" => {
+                let value = it.next().ok_or("--server needs a value")?;
+                if value.trim().is_empty() {
+                    return Err("--server must not be empty".into());
+                }
+                a.server = Some(value);
+            }
             "--json" => a.binary = false,
             "--field-frame" => a.field_frame = true,
             "--hub-order" => {
@@ -151,7 +157,11 @@ fn parse_args() -> Result<Args, String> {
                 a.hub_order = Some(value);
             }
             "--expect-build" => {
-                a.expect_build = Some(it.next().ok_or("--expect-build needs a value")?)
+                let value = it.next().ok_or("--expect-build needs a value")?;
+                if value.trim().is_empty() {
+                    return Err("--expect-build must not be empty".into());
+                }
+                a.expect_build = Some(value);
             }
             "--no-build-check" => a.no_build_check = true,
             "--state-timeout" => {
@@ -344,18 +354,33 @@ fn main() {
     };
     let mut states = 0u64;
     let state_timeout = Duration::from_secs(args.state_timeout.max(1));
+    let mut started_at = Instant::now();
     let mut in_match = false;
+    let mut ready_seen = false;
     let mut joined = false;
-    let mut join_started = Instant::now();
+    let mut join_started: Option<Instant> = None;
     let mut last_state = Instant::now();
+    let mut last_heartbeat = Instant::now();
     let mut match_seen = false;
 
     loop {
-        if !joined && join_started.elapsed() > Duration::from_secs(args.join_timeout.max(1)) {
-            eprintln!(
-                "join timeout: no room join after {:.1}s; engine is stalled or blocked",
-                join_started.elapsed().as_secs_f64()
-            );
+        if !ready_seen && started_at.elapsed() > Duration::from_secs(30) {
+            eprintln!("engine did not become ready within 30s; exiting");
+            engine.shutdown(Duration::from_secs(1));
+            std::process::exit(5);
+        }
+        if let Some(t) = join_started {
+            if t.elapsed() > Duration::from_secs(args.join_timeout.max(1)) {
+                eprintln!(
+                    "join timeout: no room join after {:.1}s; engine is stalled or blocked",
+                    t.elapsed().as_secs_f64()
+                );
+                engine.shutdown(Duration::from_secs(1));
+                std::process::exit(5);
+            }
+        }
+        if ready_seen && last_heartbeat.elapsed() > Duration::from_secs(5) {
+            eprintln!("heartbeat timeout: engine event loop is stalled; exiting");
             engine.shutdown(Duration::from_secs(1));
             std::process::exit(5);
         }
@@ -373,7 +398,9 @@ fn main() {
                     "engine ready (build {})",
                     build.unwrap_or_else(|| "?".into())
                 );
-                join_started = Instant::now();
+                ready_seen = true;
+                join_started = Some(Instant::now());
+                last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Room {
                 code,
@@ -381,6 +408,7 @@ fn main() {
                 seated,
                 role,
                 seats,
+                match_active,
             })) => {
                 println!(
                     "joined room {code} host={host} seated={seated} role={}",
@@ -388,7 +416,17 @@ fn main() {
                 );
                 print_seats(&seats);
                 joined = true;
-                match_seen = false;
+                join_started = None;
+                last_heartbeat = Instant::now();
+                if let Some(active) = match_active {
+                    in_match = active;
+                    if !active {
+                        match_seen = false;
+                        last_state = Instant::now();
+                    }
+                } else {
+                    match_seen = false;
+                }
                 if !seated {
                     eprintln!("joined as a spectator; this bot cannot drive");
                     engine.shutdown(Duration::from_secs(1));
@@ -398,6 +436,7 @@ fn main() {
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
                 print_seats(&seats);
+                last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Match {
                 phase,
@@ -411,6 +450,7 @@ fn main() {
                 match_seen = true;
                 restarts = 0;
                 last_state = Instant::now();
+                last_heartbeat = Instant::now();
                 if demo.is_some() {
                     demo = Some(Demo::default());
                 }
@@ -418,6 +458,7 @@ fn main() {
             Ok(Some(EngineEvent::State(state))) => {
                 states += 1;
                 last_state = Instant::now();
+                last_heartbeat = Instant::now();
                 if state.phase == "end" {
                     in_match = false;
                     match_seen = true;
@@ -495,16 +536,21 @@ fn main() {
                                 demo = Some(Demo::default());
                             }
                             joined = false;
-                            join_started = Instant::now();
+                            ready_seen = false;
+                            join_started = None;
+                            started_at = Instant::now();
                             last_state = Instant::now();
+                            last_heartbeat = Instant::now();
                             continue;
                         }
                     }
                     std::process::exit(6);
                 }
             }
-            Ok(Some(EngineEvent::Heartbeat { .. }))
-            | Ok(Some(EngineEvent::Timeout))
+            Ok(Some(EngineEvent::Heartbeat { .. })) => {
+                last_heartbeat = Instant::now();
+            }
+            Ok(Some(EngineEvent::Timeout))
             | Ok(Some(EngineEvent::Pong { .. }))
             | Ok(Some(EngineEvent::Other)) => {}
             Ok(None) => {
@@ -524,8 +570,11 @@ fn main() {
                             demo = Some(Demo::default());
                         }
                         joined = false;
-                        join_started = Instant::now();
+                        ready_seen = false;
+                        join_started = None;
+                        started_at = Instant::now();
                         last_state = Instant::now();
+                        last_heartbeat = Instant::now();
                         continue;
                     }
                 }

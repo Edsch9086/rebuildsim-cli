@@ -36,7 +36,7 @@ S→C  32 ...                   // room list chunks (312–611 bytes)
 ```
 C→S  10 <24-byte name>        // set display name
 C→S  04                       // ack / continue
-S→C  06 <308-byte room state>
+S→C  06 <variable, ~306+ bytes room state>
 S→C  13 <90–175 bytes>        // room info / join result
 C→S  07 <14 bytes>            // seat/robot/spawn selection
 ```

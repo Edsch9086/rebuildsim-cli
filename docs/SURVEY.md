@@ -28,7 +28,7 @@ The binary protocol is custom, not JSON. Packet types observed:
 | `0x31` | C→S | 3 | ack |
 | `0x32` | S→C | 312–611 | room list (chunked) |
 | `0x10` | C→S | 25 | set display name (24-byte field) |
-| `0x06` | S→C | 306–340+ | room state: code, host, seats, names, teams, robots, spawns |
+| `0x06` | S→C | ~306+ (300 + name bytes) | room state: code, host, seats, names, teams, robots, spawns |
 | `0x13` | S→C | 90–175 | room info / join result |
 | `0x07` | C→S | 14 | seat/robot/spawn selection (join) |
 | `0x40` | C→S | 12 | input frame (see below) |
@@ -195,8 +195,9 @@ default robot. A fresh 4-player capture had seats 0–2 red
 and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
-arrived. `is_me` is exact by username, and duplicate names are a fatal identity
-error. Coordinates are global field coordinates. The engine reports positions,
+arrived. `is_me` is exact by username. A duplicate of **our own** name is a fatal
+identity error (exit 8); duplicates among other players are collapsed into one
+name-keyed robot and are best avoided. Coordinates are global field coordinates. The engine reports positions,
 headings, and velocities in the
 **driver/alliance frame by default**: for blue it rotates everything by 180
 degrees, so red and blue bots receive identical coordinates and `Input.y=1`

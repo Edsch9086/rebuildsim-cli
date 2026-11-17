@@ -40,12 +40,23 @@ readline.createInterface({input:host.stdout}).on('line', line=>{
 for(let t=0;t<400;t++){ await wait(100); if(code) break; }
 if(!code){ console.log('no host room'); process.exit(1); }
 
-const browser=await chromium.launch({executablePath:exe,headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled']});
+const browser=await chromium.launch({executablePath:exe,headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled',
+  '--disable-background-timer-throttling','--disable-backgrounding-occluded-windows',
+  '--disable-renderer-backgrounding']});
 async function makeBot(label){
   const ctx=await browser.newContext({viewport:{width:1280,height:720},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'});
   await ctx.addInitScript(()=>{
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     window.__room06=null;
+    window.__tracks=[];
+    const track=window.rbTrack;
+    window.rbTrack=(n,p)=>{ try{ window.__tracks.push(String(n)); }catch{} return track?track(n,p):undefined; };
+    window.__rbPad={id:'Xbox 360 Controller (XInput STANDARD GAMEPAD)',index:0,connected:true,
+      mapping:'standard',axes:[0,0,0,0,0,0],
+      buttons:Array.from({length:16},()=>({pressed:false,value:0,touched:false})),timestamp:0};
+    try{
+      Object.defineProperty(navigator,'getGamepads',{configurable:true,value:()=>[window.__rbPad,null,null,null]});
+    }catch{}
     const O=window.WebSocket;
     window.WebSocket=class extends O{ constructor(...a){ super(...a); this.binaryType='arraybuffer';
       this.addEventListener('message',e=>{ try{ const b=e.data instanceof ArrayBuffer?new Uint8Array(e.data):(ArrayBuffer.isView(e.data)?new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength):null); if(b&&b[0]===0x06)window.__room06=Array.from(b); }catch{} });
@@ -92,10 +103,57 @@ host.stdin.write('{"type":"input","y":1}\n'); await wait(2000); host.stdin.write
 const afterRed=pose('RedHost');
 // drive blue tab
 const blue=bots[2];
-await blue.page.bringToFront(); await blue.page.mouse.click(640,400);
-await blue.page.keyboard.down('w'); await wait(2200); await blue.page.keyboard.up('w'); await wait(600);
-const afterBlue=pose('BlueD');
 const delta=(a,b)=>a&&b?{dx:+(b.x-a.x).toFixed(3),dy:+(b.y-a.y).toFixed(3)}:null;
+async function driveBlue() {
+  const start=pose('BlueD');
+  let after=start;
+  await blue.page.bringToFront();
+  // Background tabs throttle rendering/RAF. Give the blue client time to
+  // process the match transition before sending input.
+  for(let i=0;i<25;i++){
+    const inMatch=await blue.page.evaluate(()=>window.__tracks.includes('match_start')).catch(()=>false);
+    if(inMatch) break;
+    await wait(200);
+  }
+  for(let attempt=0;attempt<3;attempt++){
+    await blue.page.bringToFront();
+    await wait(800);
+    // The join flow can leave focus in a hidden text box.
+    await blue.page.evaluate(()=>{ document.activeElement?.blur?.(); });
+    if(attempt===0){
+      await blue.page.mouse.click(640,400);
+      await blue.page.keyboard.down('w'); await wait(2500); await blue.page.keyboard.up('w');
+    } else if(attempt===1){
+      // Same virtual gamepad path the headless engine uses. y=1 -> axis 1 = -1.
+      await blue.page.evaluate(()=>{
+        const e=new Event('gamepadconnected'); e.gamepad=window.__rbPad;
+        window.dispatchEvent(e);
+        window.__rbPad.axes[1]=-1;
+        window.__rbPad.timestamp=performance.now();
+      });
+      await wait(2500);
+      await blue.page.evaluate(()=>{ window.__rbPad.axes[1]=0; window.__rbPad.timestamp=performance.now(); });
+    } else {
+      // Trusted-ish events on the canvas (window-targeted events break the
+      // game's Node.contains checks).
+      await blue.page.evaluate(()=>{
+        const c=document.querySelector('canvas');
+        if(!c) return;
+        c.setAttribute('tabindex','0'); c.focus?.();
+        const ev=(t)=>c.dispatchEvent(new KeyboardEvent(t,{key:'w',code:'KeyW',keyCode:87,which:87,bubbles:true}));
+        ev('keydown'); setTimeout(()=>ev('keyup'),2000);
+      });
+      await wait(2500);
+    }
+    await wait(500);
+    after=pose('BlueD');
+    if((delta(start,after)?.dx||0)<-0.5) break;
+  }
+  return after;
+}
+const afterBlue=await driveBlue();
+const blueTracks=await blue.page.evaluate(()=>window.__tracks.filter(n=>/match|room_join/.test(n))).catch(()=>[]);
+console.log('BLUE TRACKS',JSON.stringify(blueTracks));
 console.log('AFTER red',JSON.stringify(afterRed),'blue',JSON.stringify(afterBlue));
 console.log('DELTA red',JSON.stringify(delta(beforeRed,afterRed)),'blue',JSON.stringify(delta(beforeBlue,afterBlue)));
 const verdict = {

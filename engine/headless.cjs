@@ -553,6 +553,7 @@ function handleServerFrame(buf, wsId) {
       failJoin('room_code_mismatch', `joined ${roomCode}, expected ${OPT.code}`);
       return;
     }
+    if (!lastRoomWsId && wsId) lastRoomWsId = wsId;
     lastRoom06 = Buffer.from(buf);
     addPrintableNames(buf);
     applyRoom06(buf);
@@ -596,7 +597,6 @@ globalThis.WebSocket = class extends NativeWS {
           if (wslog.length > 20000) wslog.splice(0, 10000);
         }
         if (buf[0] === 0x41 || buf[0] === 0x42) lastRoomWsId = id;
-        else if (buf[0] === 0x06 && id > 1) lastRoomWsId = id;
         handleServerFrame(buf, id);
       }
     });
@@ -859,7 +859,7 @@ function scanFuelRun() {
     if (ok) {
       fuelAddr = i;
       fuelSource = 'scan';
-      fuelVerified = false;
+      fuelVerified = true;
       log('fuel array (scan) at', '0x' + i.toString(16), 'count', count);
       return i;
     }
@@ -886,7 +886,12 @@ function readFuel() {
   if (!fuelAddr || !mem || !fuelPacketCount) return [];
   const a = u8();
   const count = fuelPacketCount;
-  if (fuelAddr + count * 7 > a.length) { fuelAddr = 0; fuelVerified = false; return []; }
+  if (fuelAddr + count * 7 > a.length) {
+    fuelAddr = 0;
+    fuelSource = null;
+    fuelVerified = false;
+    return [];
+  }
   const out = [];
   for (let i = 0; i < count; i++) {
     const off = fuelAddr + i * 7;
@@ -1499,6 +1504,7 @@ setInterval(() => {
     } else {
       log('fuel base moved; relocating');
       fuelAddr = 0;
+      fuelSource = null;
       fuelVerified = false;
       lastFuelScan = 0;
       lastFuelVerify = 0;

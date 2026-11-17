@@ -71,7 +71,8 @@ stdout is JSON lines only:
 {"type":"protocol","version":1}
 {"type":"seats","code":"ABCDE","seats":[
   {"seat":0,"name":"TestBot","team_flag":0,"alliance":"red"}]}
-{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
+{"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver",
+ "match_active":false,"seats":[...]}
 {"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
 {"type":"score","seq":0,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
 {"type":"state","seq":0,"t":...,"phase":"auto","substage":"auto","time":158.0,
@@ -192,7 +193,8 @@ dependency because the headless engine itself does not need it.
   but does not auto-reconnect. The Rust CLI exits 5 on state timeout and 6 on
   room-WS close (disable the latter with `--allow-ws-close`). In the lobby,
   `--restart-on-exit` can respawn/rejoin the same room code (up to
-  `--max-restarts`, default 3); it is disabled once a match starts.
+  `--max-restarts`, default 3); it is disabled after a match starts until a
+  fresh lobby/room event arrives.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
   downloads both assets to temp files, records their SHA-256 hashes, and writes
   `build.json` last. The engine verifies the hashes, compares the cached

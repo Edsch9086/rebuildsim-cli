@@ -40,7 +40,7 @@ function parseRoom06(buf) {
       team_flag: teamFlag,
       alliance: teamFlag === 1 ? 'blue' : 'red',
     });
-    i += 8 + len - 1;
+    i += 16 + len - 1;
   }
   return { seats };
 }
