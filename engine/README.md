@@ -181,6 +181,9 @@ dependency because the headless engine itself does not need it.
   shifts because the FMS picks the order; use `--hub-order red|blue` to force it
   for practice/test matches.
 - `--spawn` is deferred; infer the spawn from `me`.
+- After a match the game stays on the results screen until a human continues.
+  The engine does not automate that screen; when the room screen returns it
+  resets, readies the seat, and (with `--start`) starts the next match.
 - The CLI is normally a **joiner**: a human spectator hosts, bots join and
   auto-ready, and the human starts the match. The engine checks the 0x06 ready
   byte and only clicks READY if the seat is not ready (rematch), so it never
