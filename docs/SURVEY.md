@@ -509,7 +509,8 @@ VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
 This asserts four unique names in four seats, the host's `me` exactly its own
 robot, and the fourth seat blue from the `0x06` team flag. The blue press of
 `W` is logged observationally: a verified run moved toward red (host/global
-dx -10.376), which is +x in BlueD's normalized frame. Headless Chromium sometimes
+dx -10.376, and a later run dx -10.226), which is +x in BlueD's normalized
+frame. Headless Chromium sometimes
 does not deliver keyboard focus to a background tab, so the current test does
 not hard-fail on blue movement.
 
