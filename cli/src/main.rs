@@ -213,7 +213,13 @@ fn parse_args() -> Result<Args, String> {
             "--asset-dir" => {
                 a.asset_dir = Some(PathBuf::from(it.next().ok_or("--asset-dir needs a value")?))
             }
-            "--engine" => a.engine = PathBuf::from(it.next().ok_or("--engine needs a value")?),
+            "--engine" => {
+                let value = it.next().ok_or("--engine needs a value")?;
+                if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
+                    return Err("--engine must be a path, not an option".into());
+                }
+                a.engine = PathBuf::from(value);
+            }
             other => return Err(format!("unknown argument: {other}")),
         }
     }
