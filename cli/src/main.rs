@@ -11,6 +11,7 @@
 
 use rebuildsim_cli::engine::{
     Engine, EngineEvent, EngineOptions, GameState, Input, default_engine_path, find_me,
+    validate_server,
 };
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
@@ -148,13 +149,7 @@ fn parse_args() -> Result<Args, String> {
             }
             "--server" => {
                 let value = it.next().ok_or("--server needs a value")?;
-                if value.trim().is_empty() || value != value.trim() || value.starts_with('-') {
-                    return Err("--server must be a non-empty host:port value".into());
-                }
-                let bracketed = value.starts_with('[') && value.contains("]:");
-                if !bracketed && value.matches(':').count() != 1 {
-                    return Err("--server must be HOST:PORT (bracket IPv6 as [addr]:port)".into());
-                }
+                validate_server(&value)?;
                 a.server = Some(value);
             }
             "--json" => a.binary = false,

@@ -181,9 +181,10 @@ dependency because the headless engine itself does not need it.
   shifts because the FMS picks the order; use `--hub-order red|blue` to force it
   for practice/test matches.
 - `--spawn` is deferred; infer the spawn from `me`.
-- After a match the engine clicks `BACK TO THE ROOM` on the results screen
-  after ~3.5 s (retry at 7.5 s), then resets and readies for the next match.
-  A human can click earlier; the pending click is canceled by the room view.
+- After a match the engine clicks `BACK TO THE ROOM` on the results screen at
+  ~3.5 s, 7.5 s, and 15 s. If the room has not returned at 20 s it emits
+  `results_stuck` and exits 6. A human can click earlier; the pending clicks are
+  canceled by the room view.
 - The CLI is normally a **joiner**: a human spectator hosts, bots join and
   auto-ready, and the human starts the match. The engine checks the 0x06 ready
   byte and only clicks READY if the seat is not ready (rematch), so it never

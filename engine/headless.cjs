@@ -446,6 +446,7 @@ function noteSeatPresence(ours) {
       seated = true;
       role = 'driver';
       log('seat returned before spectator exit; recovering');
+      emitRoom();
     }
     return;
   }
@@ -1798,6 +1799,16 @@ setInterval(() => {
       uiLater(() => {
         if (!flow.match) { log('results: retry back to room'); globalThis.__ctl.click(365, 688); }
       }, 7500);
+      uiLater(() => {
+        if (!flow.match) { log('results: final back to room'); globalThis.__ctl.click(365, 688); }
+      }, 15000);
+      uiLater(() => {
+        if (!flow.match) {
+          log('results screen did not return to the room; exiting');
+          emit({ type: 'error', error: 'results_stuck' });
+          setTimeout(() => process.exit(6), 100);
+        }
+      }, 20000);
     }
   }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));

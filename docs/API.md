@@ -328,8 +328,9 @@ The CLI adds several watchdogs on top of the engine:
 - If `0x41` stops for 3 s during a live match (or no positive clock arrives
   within 15 s of match start), the engine emits `match_clock_stalled` and stops
   states; the state timeout then exits `5`.
-- A room update that omits the driver seat is debounced for 2.5 s. The CLI does
-  not exit immediately; the engine exits `7` only if the seat does not return.
+- A room update that omits the driver seat is debounced for 2.5 s in the lobby
+  and 5 s during a match. The CLI waits for the engine's exit `7`; a returning
+  seat cancels the demotion and re-emits a driver room event.
 - Navigating back to the menu/multiplayer screen after joining exits `6`
   (`left_room`) so the orchestrator can restart or rejoin.
 
@@ -366,9 +367,10 @@ The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 
 - `--spawnpoint` is deferred. The engine joins with the default seat and logs
   that the flag is ignored; a tuned bot can infer its spawn from `me`.
-- After a match the engine clicks `BACK TO THE ROOM` after ~3.5 s (retry at
-  7.5 s), then resets and readies for the next match. A human can click earlier;
-  the pending result-screen click is canceled when the room view appears.
+- After a match the engine clicks `BACK TO THE ROOM` at ~3.5 s, 7.5 s, and
+  15 s. If the results screen still has not returned at 20 s it emits
+  `results_stuck` and exits `6`. A human can click earlier; pending result-screen
+  clicks are canceled when the room view appears.
 - Blue control-frame inversion is implemented and the 4th seat is confirmed
   blue. The 4-client test asserts the four seats, host `me`, robot identities,
   and the normalized frame; it logs blue keyboard movement as observational

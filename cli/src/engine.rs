@@ -125,19 +125,38 @@ impl Robot {
     }
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HubStatus {
     /// Our hub status. `None` during alliance shifts when AUTO was tied.
+    #[serde(default)]
     pub active: Option<bool>,
+    #[serde(default)]
     pub red_active: Option<bool>,
+    #[serde(default)]
     pub blue_active: Option<bool>,
     /// True when red's hub is inactive in SHIFT 1 (red won AUTO).
+    #[serde(default)]
     pub red_inactive_first: Option<bool>,
     /// "auto" | "field_reset" | "transition" | "shift1".."shift4" |
     /// "endgame" | "end" | "unknown"
+    #[serde(default = "default_unknown")]
     pub phase: String,
     /// "auto_score" | "tie" | "forced" | "unknown"
+    #[serde(default = "default_unknown")]
     pub source: String,
+}
+
+impl Default for HubStatus {
+    fn default() -> Self {
+        Self {
+            active: None,
+            red_active: None,
+            blue_active: None,
+            red_inactive_first: None,
+            phase: default_unknown(),
+            source: default_unknown(),
+        }
+    }
 }
 
 /// A state or a non-state event, for callers that need to observe errors/WS
@@ -545,6 +564,34 @@ fn validate_option_value(name: &str, value: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+pub fn validate_server(value: &str) -> Result<(), String> {
+    if value.is_empty() || value != value.trim() || value.starts_with('-') {
+        return Err("server must be a non-empty host:port value".into());
+    }
+    let (host, port) = if let Some(rest) = value.strip_prefix('[') {
+        let (host, port) = rest
+            .split_once("]:")
+            .ok_or_else(|| "server IPv6 must be [addr]:port".to_string())?;
+        (host, port)
+    } else {
+        let (host, port) = value
+            .split_once(':')
+            .ok_or_else(|| "server must be HOST:PORT".to_string())?;
+        if host.contains(':') {
+            return Err("server IPv6 must be bracketed as [addr]:port".into());
+        }
+        (host, port)
+    };
+    if host.is_empty()
+        || port.is_empty()
+        || port.contains(']')
+        || port.parse::<u16>().map(|p| p == 0).unwrap_or(true)
+    {
+        return Err("server must be HOST:PORT (bracket IPv6 as [addr]:port)".into());
+    }
+    Ok(())
+}
+
 fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
     if opts.username.is_empty()
         || opts.username != opts.username.trim()
@@ -555,6 +602,16 @@ fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
             "username must be 1-10 printable ASCII characters",
+        ));
+    }
+    let engine_path = opts.engine.to_string_lossy();
+    if engine_path.trim().is_empty()
+        || engine_path != engine_path.trim()
+        || engine_path.starts_with('-')
+    {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "engine path must be non-empty and not start with '-'",
         ));
     }
     if opts.emit_hz < 1 || opts.emit_hz > 60 {
@@ -585,22 +642,8 @@ fn validate_options(opts: &EngineOptions) -> std::io::Result<()> {
         }
     }
     if let Some(server) = &opts.server {
-        validate_option_value("server", server)?;
-        let (host, port) = if server.starts_with('[') && server.contains("]:") {
-            let split = server.rfind("]:").unwrap();
-            (&server[1..split], &server[split + 2..])
-        } else if server.matches(':').count() == 1 {
-            let (h, p) = server.split_once(':').unwrap();
-            (h, p)
-        } else {
-            ("", "")
-        };
-        if host.is_empty() || port.parse::<u16>().map(|p| p == 0).unwrap_or(true) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                "server must be HOST:PORT (bracket IPv6 as [addr]:port)",
-            ));
-        }
+        validate_server(server)
+            .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     }
     if let Some(build) = &opts.expect_build {
         validate_option_value("expect-build", build)?;
@@ -634,6 +677,16 @@ impl Engine {
         validate_options(opts)?;
         let mut cmd = Command::new("node");
         cmd.arg(&opts.engine);
+        let engine_path = opts.engine.to_string_lossy();
+        if engine_path.trim().is_empty()
+            || engine_path != engine_path.trim()
+            || engine_path.starts_with('-')
+        {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "engine path must be non-empty and not start with '-'",
+            ));
+        }
         if opts.emit_hz < 1 || opts.emit_hz > 60 {
             return Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
@@ -962,6 +1015,14 @@ mod tests {
         opts.hub_order = Some("Red".into());
         assert!(validate_options(&opts).is_err());
         opts.hub_order = Some("red".into());
+        assert!(validate_options(&opts).is_ok());
+        opts.server = Some("localhost:99999".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = Some(":8080".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = Some("[::1]:0".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = Some("[::1]:8080".into());
         assert!(validate_options(&opts).is_ok());
     }
 
