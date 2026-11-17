@@ -728,6 +728,14 @@ function activeAlliance() {
 // engine reports every position/heading/velocity in that same alliance frame,
 // so identical bot logic works on both sides. --field-frame returns raw global
 // coordinates instead.
+function readHopper(addr) {
+  if (!addr || !mem) return null;
+  const a = u8();
+  if (addr + 0x4f >= a.length) return null;
+  const n = a[addr + 0x4b] | (a[addr + 0x4c] << 8) | (a[addr + 0x4d] << 16) | (a[addr + 0x4e] << 24);
+  return n >= 0 && n <= 255 ? n : null;
+}
+
 function inAllianceFrame() {
   return !OPT.fieldFrame && activeAlliance() === 'blue';
 }
@@ -757,6 +765,7 @@ function readRobots() {
         x: +sp.x.toFixed(4), y: +sp.y.toFixed(4), z: +prev.z.toFixed(4),
         heading: +allianceHeading(prev.heading).toFixed(4),
         vx: 0, vy: 0, vz: 0, yawRate: 0,
+        hopper_fuel: prev.hopper_fuel ?? null,
       });
       continue;
     }
@@ -771,7 +780,8 @@ function readRobots() {
       while (dh < -Math.PI) dh += 2 * Math.PI;
       yawRate = dh / dt;
     }
-    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading });
+    const hopperFuel = readHopper(p.addr);
+    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading, hopper_fuel: hopperFuel });
     let alliance = allianceByName.get(name);
     if (!alliance) {
       // Fallback only: spawn side. Prefer the 0x06 seat order when available.
@@ -789,6 +799,7 @@ function readRobots() {
       heading: +allianceHeading(p.heading).toFixed(4),
       vx: +ov.x.toFixed(3), vy: +ov.y.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
+      hopper_fuel: hopperFuel,
     });
   }
   return out;
@@ -1093,6 +1104,7 @@ setInterval(() => {
     protocol: protocolVersion,
     frame: OPT.fieldFrame ? 'field' : 'alliance',
     alliance: activeAlliance(),
+    hopper_fuel: me ? me.hopper_fuel : null,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }

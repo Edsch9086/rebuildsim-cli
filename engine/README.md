@@ -118,14 +118,16 @@ fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
 ```bash
 node room06_test.cjs
 node frame_test.cjs
+node hopper_test.cjs
 RB_ASSET_DIR=engine/cache node binary_test.cjs
 ```
 
 `room06_test.cjs` parses a synthetic 4-seat packet and the captured live packet
 (seats 0–2 red, seat 3 blue). `frame_test.cjs` forces the blue output frame and
 checks that poses/fuel/heading rotate 180 degrees and that forward input reverses
-in normalized coordinates. `binary_test.cjs` creates a 25% fuel room and checks
-the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
+in normalized coordinates. `hopper_test.cjs` starts a 25% match and checks the
+hopper goes 8 -> 0 while shooting. `binary_test.cjs` creates a 25% fuel room and
+checks the `RSB1` framing, packed 150-fuel frame, and `fuel_bin` state.
 
 `multibot_browser.mjs` is the optional 4-client identity/control test (engine
 host + three browser clients in separate contexts). It needs `playwright-core`

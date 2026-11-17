@@ -42,6 +42,7 @@ while let Some(state) = engine.next_state()? {
 | `fuel.id` | zero-based fuel array index, `0..fuel_count-1` |
 | `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
+| `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
 | `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
 | `red_score`, `blue_score`, `auto_*` | game points as displayed on the HUD (integer) |
 | `Input.x` | left stick X, normalized `-1.0..1.0` (right positive) |
@@ -127,8 +128,15 @@ pub struct Robot {
     pub vx: f32, pub vy: f32, pub vz: f32, // m/s, in state.frame
     pub yaw_rate: f32,
     pub pose_source: String,  // "predicted" (render copy, ~48 Hz) | "acked"
+    pub hopper_fuel: Option<u16>, // that robot's hopper fuel, if readable
 }
 ```
+
+`hopper_fuel` is the local robot's held fuel, read from the player struct at
+name+0x4b. It starts at 8 in the default build (HUD `FUEL 8/55`) and decrements
+while shooting. The hopper **capacity** (55) is a HUD constant in this build and
+is not exposed yet. Remote robots may report their hopper too, but the local
+robot's value is the reliable one.
 
 `Fuel`: `id, x, y, z, present`, plus optional `vx, vy, vz, count, flags` merged
 from the server packet. The array length is `fuel_count`, not a fixed 456.

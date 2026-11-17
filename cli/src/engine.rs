@@ -76,6 +76,9 @@ pub struct Robot {
     pub yaw_rate: f32,
     #[serde(default)]
     pub pose_source: String,
+    /// Local hopper fuel count (u32 at name+0x4b in the player struct).
+    #[serde(default)]
+    pub hopper_fuel: Option<u16>,
 }
 
 impl Robot {
@@ -162,6 +165,9 @@ pub struct GameState {
     /// Our alliance for diagnostics; bots should not need it in alliance frame.
     #[serde(default)]
     pub alliance: String,
+    /// Our robot's hopper fuel count, if the player struct is readable.
+    #[serde(default)]
+    pub hopper_fuel: Option<u16>,
     /// True when `fuel` was delivered on the binary channel (fuel is empty).
     #[serde(default)]
     pub fuel_bin: bool,

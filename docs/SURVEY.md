@@ -504,6 +504,14 @@ spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
 as red. This is the behavior the API guarantees by default; `--field-frame`
 restores raw global coordinates.
 
+### Hopper fuel
+
+The local hopper is a u32 at **name+0x4b** in the player struct (and the same
+offset in the render/predicted copy). A memory trace while holding shoot showed
+the value go `8,8,...,7,...,6,...,0`; the HUD read `FUEL 8/55`. The engine emits
+`hopper_fuel` at the top level and on each robot. The 55 capacity is a HUD
+constant in this build and is not decoded yet.
+
 ### Scores / time / substages
 
 A full browser match captured every `0x41` frame plus periodic HUD screenshots.

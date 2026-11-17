@@ -160,8 +160,18 @@ fn print_state(state: &GameState, username: &str) {
     let me = state.me.as_ref().or_else(|| find_me(state, username));
     let me_s = match me {
         Some(r) => format!(
-            "me={}({}:{} {:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2})",
-            r.name, r.alliance, r.pose_source, r.x, r.y, r.heading, r.vx, r.vy
+            "me={}({}:{} {:+.2},{:+.2}) h={:+.2} v=({:+.2},{:+.2}) hop={}",
+            r.name,
+            r.alliance,
+            r.pose_source,
+            r.x,
+            r.y,
+            r.heading,
+            r.vx,
+            r.vy,
+            r.hopper_fuel
+                .map(|h| h.to_string())
+                .unwrap_or_else(|| "?".into())
         ),
         None => "me=?".to_string(),
     };
