@@ -81,7 +81,11 @@ async function makeBot(label){
     joined=await p.evaluate(()=>!!window.__room06);
   }
   if(!joined) throw new Error(`${label}: join failed`);
-  await p.mouse.click(646,688); await p.waitForTimeout(400);
+  // Center of the READY button; the room UI needs a moment to render after
+  // the join packet, especially for the last joiner.
+  await p.waitForTimeout(2500);
+  await p.mouse.click(794,688);
+  await p.waitForTimeout(600);
   await p.screenshot({path:path.join(OUT, `b4e_${label}_room.png`)});
   return {label,page:p,ctx};
 }
@@ -90,6 +94,8 @@ const bots=[];
 for(const label of ['RedB','RedC','BlueD']){ console.log('loading',label); bots.push(await makeBot(label)); console.log('joined',label); await wait(700); }
 for(let t=0;t<100;t++){ await wait(100); if(seats && seats.length>=4) break; }
 console.log('HOST SEATS',JSON.stringify(seats));
+// Give the browser clients time to click READY after their room UI renders.
+await wait(5000);
 await host.stdin.write('{"type":"ready"}\n'); await wait(900);
 await host.stdin.write('{"type":"start"}\n');
 for(let t=0;t<200;t++){ await wait(100); if(lastState && lastState.robots.length>=4) break; }

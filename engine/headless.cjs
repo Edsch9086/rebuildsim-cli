@@ -380,7 +380,8 @@ function emitRoom() {
   const key = `${roomCode}|${host}|${seated}|${role}|${roomSeats.map(s => `${s.seat}:${s.name}:${s.robot_id}:${s.team_flag}:${s.alliance}`).join(',')}`;
   if (key === lastRoomKey) return;
   lastRoomKey = key;
-  emit({ type: 'room', code: roomCode, host, seated, role, seats: roomSeats });
+  emit({ type: 'room', code: roomCode, host, seated, role,
+    match_active: !!flow.match, seats: roomSeats });
 }
 
 function resetMatchState() {
@@ -602,7 +603,9 @@ function handleServerFrame(buf, wsId) {
       return;
     }
     if (!lastRoomWsId && wsId) lastRoomWsId = wsId;
-    lastRoom06 = Buffer.from(buf);
+    // Keep the last good seat packet; a zero-seat/partial packet must not
+    // replace it and be re-applied at the next match start.
+    if (parseRoom06(buf).seats.length) lastRoom06 = Buffer.from(buf);
     addPrintableNames(buf);
     applyRoom06(buf);
     if (globalThis.__RB_DEBUG) log('ROOM06', buf.toString('hex'));

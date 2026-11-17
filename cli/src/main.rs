@@ -207,7 +207,11 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
-    if a.username.is_empty() || a.username != a.username.trim() || a.username.len() > 10 {
+    if a.username.is_empty()
+        || a.username != a.username.trim()
+        || a.username.len() > 10
+        || !a.username.is_ascii()
+    {
         return Err(
             "--username must be 1-10 ASCII characters without leading/trailing spaces".into(),
         );
