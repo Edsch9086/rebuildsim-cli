@@ -39,7 +39,7 @@ Flags:
 
 ```
 --code <CODE>       join a room
---username <NAME>   display name
+--username <NAME>   display name (1-10 ASCII; the game truncates longer names)
 --create            test-only: create a room
 --start             test-only: if host, ready and start the match
 --spawn <S>         reserved; ignored (infer spawn from first pose)

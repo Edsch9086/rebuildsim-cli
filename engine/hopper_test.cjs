@@ -26,6 +26,12 @@ readline.createInterface({ input: child.stdout }).on('line', (line) => {
 });
 (async () => {
   for (let t = 0; t < 300; t++) { await wait(100); if (state && state.time != null && state.time < 162.5) break; }
+  if (!state || !state.me) {
+    console.error('no seated driver state (joined as spectator or no match); state=', state && { phase: state.phase, me: state.me });
+    try { child.stdin.write('{"type":"quit"}\n'); } catch {}
+    child.kill();
+    process.exit(1);
+  }
   const start = state.hopper_fuel;
   console.log('initial hopper', start, 'me.hopper', state.me && state.me.hopper_fuel);
   // Intake flag: bit 6 at name+0x56.

@@ -42,6 +42,7 @@ function classifyMatch(t, countdown, clockStarted) {
   const phase = prematch ? 'countdown' : phaseFor(t);
   const substage = prematch ? 'prematch' : substageFor(t);
   const ended = clockStarted && t != null && t <= END_EPSILON;
+  if (ended) return { phase: 'end', substage: 'end', countdown: false, ended: true };
   return { phase, substage, countdown: prematch, ended };
 }
 

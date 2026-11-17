@@ -32,7 +32,10 @@ assert.strictEqual(preNull.ended, false);
 const end = classifyMatch(0, 0, true);
 assert.strictEqual(end.phase, 'end');
 assert.strictEqual(end.ended, true);
-assert.strictEqual(classifyMatch(0.02, 0, true).ended, true);
+const finalClock = classifyMatch(0.02, 0, true);
+assert.strictEqual(finalClock.ended, true);
+assert.strictEqual(finalClock.phase, 'end');
+assert.strictEqual(finalClock.substage, 'end');
 assert.strictEqual(classifyMatch(0.2, 0, true).ended, false);
 
 // A live match is not ended.

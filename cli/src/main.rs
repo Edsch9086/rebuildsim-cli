@@ -207,6 +207,11 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
+    if a.username.is_empty() || a.username != a.username.trim() || a.username.len() > 10 {
+        return Err(
+            "--username must be 1-10 ASCII characters without leading/trailing spaces".into(),
+        );
+    }
     if a.code.is_some() && a.create {
         return Err("use --code <LOBBY> or --create, not both".to_string());
     }

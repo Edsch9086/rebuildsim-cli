@@ -266,11 +266,12 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
   console.error(`missing game assets in ${ASSET_DIR}; run: node prepare.mjs`);
   process.exit(2);
 }
+OPT.code = String(OPT.code || '').trim().toUpperCase();
 log('engine options', JSON.stringify(OPT));
 if (!OPT.username || OPT.username !== OPT.username.trim()
-    || Buffer.byteLength(OPT.username, 'utf8') > 24
+    || Buffer.byteLength(OPT.username, 'utf8') > 10
     || !/^[\x20-\x7e]+$/.test(OPT.username)) {
-  console.error('invalid --username: use 1-24 printable ASCII characters without leading/trailing spaces');
+  console.error('invalid --username: use 1-10 printable ASCII characters without leading/trailing spaces');
   try { emit({ type: 'error', error: 'invalid_username' }); } catch {}
   setTimeout(() => process.exit(2), 100);
 }
@@ -311,6 +312,7 @@ let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let matchWasActive = false;
+let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -359,7 +361,14 @@ function failIdentity(reason, detail) {
   emit({ type: 'error', error: reason, detail: detail || '' });
   setTimeout(() => process.exit(8), 100);
 }
-let joinFatal = false;
+let joinFatal = false, spectatorFatal = false;
+function failSpectator(detail) {
+  if (spectatorFatal || identityFatal || joinFatal) return;
+  spectatorFatal = true;
+  log('joined without a driver seat; exiting', detail || '');
+  emit({ type: 'error', error: 'spectator', detail: detail || '' });
+  setTimeout(() => process.exit(7), 100);
+}
 function failJoin(reason, detail) {
   if (identityFatal || joinFatal) return;
   joinFatal = true;
@@ -384,11 +393,18 @@ function resetMatchState() {
   startClicked = false;
   matchWasActive = false;
   lastRoomKey = '';
+  if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
+  if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
+  seatMissingSince = 0;
+  last41At = 0;
+  fuelVerifyFails = 0;
   poseCache.clear();
+  poseMissUntil.clear();
   lastPose.clear();
   fuelAddr = 0;
   lastFuelScan = 0;
   lastFuelVerify = 0;
+  lastFuelLocate = 0;
   fuelSource = null;
   fuelVerified = false;
   fuelPacket.clear();
@@ -404,6 +420,28 @@ function resetMatchState() {
   scores = { red: 0, blue: 0 };
   autoScores = { red: 0, blue: 0 };
   lastScoreKey = '';
+}
+
+function noteSeatPresence(ours) {
+  if (ours) {
+    seatMissingSince = 0;
+    if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
+    return;
+  }
+  if (!seated || (flow.match && seated)) return;
+  if (seatMissingSince) return;
+  seatMissingSince = Date.now();
+  seatDemoteTimer = setTimeout(() => {
+    seatDemoteTimer = null;
+    if (!seatMissingSince) return;
+    if (seated && Date.now() - seatMissingSince >= 1200) {
+      seated = false;
+      role = 'spectator';
+      log('seat not present for 1.2s; demoting to spectator');
+      emitRoom();
+      failSpectator('seat missing for 1.2s');
+    }
+  }, 1500);
 }
 
 function clearRoomIdentity() {
@@ -424,7 +462,9 @@ function applyRoom06(buf) {
       return roomSeats;
     }
     log('room state parse produced no seats; clearing stale seat list');
+    noteSeatPresence(false);
     clearRoomIdentity();
+    lastRoom06 = null;
     return roomSeats;
   }
   if (flow.match && roomSeats.length) {
@@ -473,10 +513,15 @@ function applyRoom06(buf) {
       log('ignoring apparent seat loss during a match');
       return roomSeats;
     }
-    if (ours !== seated || (ours && role !== 'driver')) {
-      seated = ours;
-      role = ours ? 'driver' : 'spectator';
-      if (ours && !readyClicked && !uiBusy) {
+    if (!ours) {
+      noteSeatPresence(false);
+      return roomSeats;
+    }
+    noteSeatPresence(true);
+    if (!seated || role !== 'driver') {
+      seated = true;
+      role = 'driver';
+      if (!readyClicked && !uiBusy) {
         readyClicked = true;
         uiLater(() => globalThis.__ctl.click(646, 688), 1000);
       }
@@ -488,6 +533,7 @@ function applyRoom06(buf) {
 
 function parse41(buf) {
   last41 = buf;
+  last41At = Date.now();
   if (buf.length >= 10) {
     const dv0 = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     lastCountdown = dv0.getFloat32(6, true);
@@ -503,16 +549,18 @@ function parse41(buf) {
   if (buf.length >= 14) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     lastMatchTime = dv.getFloat32(10, true);
+    if (!Number.isFinite(lastMatchTime)) lastMatchTime = null;
     if (lastMatchTime > 0) clockStarted = true;
   }
 }
 
 function onMatchStart() {
   const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
+  const stale = flow.match && (!last41At || Date.now() - last41At > 1500);
   // Match start is idempotent per match: /multi/match and match_start both fire,
   // and a second call during the countdown must not wipe the first clock/fuel
-  // packets. A new match after an ended one (no /room screen) is allowed.
-  if (flow.match && !ended) return;
+  // packets. A new match after an ended/abandoned one (no /room screen) is allowed.
+  if (flow.match && !ended && !stale) return;
   resetMatchState();
   flow.match = true;
   matchStarted = true;
@@ -541,7 +589,7 @@ function handleServerFrame(buf, wsId) {
       return;
     }
     // room state: room code at 1..5, then seat records in seat order.
-    const nextCode = buf.subarray(1, 6).toString('latin1');
+    const nextCode = buf.subarray(1, 6).toString('latin1').trim().toUpperCase();
     if (roomCode && nextCode && nextCode !== roomCode) {
       log('room code changed', roomCode, '->', nextCode);
       clearRoomIdentity();
@@ -693,6 +741,7 @@ let lastFuelVerify = 0;
 let fuelPacketCount = 0;
 let fuelSource = null;
 let fuelVerified = false;
+let fuelVerifyFails = 0;
 const FUEL_Z_OFFSET = Math.round(0.045 * 4096);
 let lastFuelLocate = 0;
 const fuelPacket = new Map();
@@ -707,6 +756,7 @@ function parseFuelPacket(buf) {
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
+    fuelVerifyFails = 0;
     fuelPacket.clear();
   }
   let added = 0;
@@ -1229,7 +1279,12 @@ function mouse(type, x, y, button = 0, buttons = 1) {
   canvas.dispatchEvent(e);
   globalThis.window.dispatchEvent(e);
 }
-function click(x, y) { mouse('mousemove', x, y, 0, 0); setTimeout(() => mouse('mousedown', x, y, 0, 1), 50); setTimeout(() => mouse('mouseup', x, y, 0, 0), 100); }
+function click(x, y) {
+  const gen = uiGeneration;
+  mouse('mousemove', x, y, 0, 0);
+  setTimeout(() => { if (gen === uiGeneration) mouse('mousedown', x, y, 0, 1); }, 50);
+  setTimeout(() => { if (gen === uiGeneration) mouse('mouseup', x, y, 0, 0); }, 100);
+}
 globalThis.__ctl = { key, tapKey, mouse, click, canvas, Module, getMem: () => mem, wslog };
 
 function refreshPad() {
@@ -1300,6 +1355,7 @@ function tapBox(index, x, y, text) {
 
 const flow = { booted: false, menu: false, name: false, rooms: false, joined: false, match: false };
 const uiTimers = new Set();
+let uiGeneration = 0;
 function uiLater(fn, ms) {
   const id = setTimeout(() => {
     uiTimers.delete(id);
@@ -1311,6 +1367,7 @@ function uiLater(fn, ms) {
 function cancelUiTimers() {
   for (const id of uiTimers) clearTimeout(id);
   uiTimers.clear();
+  uiGeneration++;
   uiBusy = false;
 }
 function onTrack(name, params) {
@@ -1332,13 +1389,23 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
-      // Returning to the room screen ends the previous match (results/leave).
-      // Do not reset a genuinely live match; a stale page_view must not stop
-      // state emission mid-match.
-      const matchLive = flow.match && clockStarted && lastMatchTime != null && lastMatchTime > 0.05;
+      // A room screen normally means the previous match ended or was left.
+      // If the clock is still advancing, this is a stale page_view: ignore it.
+      // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
+      const matchLive = flow.match && clockStarted && lastMatchTime != null
+        && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500;
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState();
         emitRoom();
+      } else if (matchLive && !roomResetTimer) {
+        roomResetTimer = setTimeout(() => {
+          roomResetTimer = null;
+          if (flow.match && (!last41At || Date.now() - last41At >= 1500)) {
+            log('room screen without clock updates; resetting stale match');
+            resetMatchState();
+            emitRoom();
+          }
+        }, 1800);
       }
       if (flow.joined && seated && !flow.match && !readyClicked && !uiBusy) {
         readyClicked = true;
@@ -1381,13 +1448,17 @@ function onTrack(name, params) {
     host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
     role = p.role;
-    roomCode = roomCode || OPT.code;
-    if (OPT.code && roomCode && roomCode.toUpperCase() !== OPT.code.toUpperCase()) {
+    roomCode = (roomCode || OPT.code).toUpperCase();
+    if (OPT.code && roomCode && roomCode !== OPT.code) {
       failJoin('room_code_mismatch', `joined ${roomCode}, expected ${OPT.code}`);
       return;
     }
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emitRoom();
+    if (!seated) {
+      failSpectator(`room_join role=${p.role}`);
+      return;
+    }
     const readyAndStart = () => {
       if (host && OPT.start && !startClicked) {
         startClicked = true;
@@ -1501,13 +1572,18 @@ setInterval(() => {
     lastFuelVerify = fuelNow;
     if (verifyFuelBase()) {
       fuelVerified = true;
+      fuelVerifyFails = 0;
     } else {
-      log('fuel base moved; relocating');
-      fuelAddr = 0;
-      fuelSource = null;
       fuelVerified = false;
-      lastFuelScan = 0;
-      lastFuelVerify = 0;
+      fuelVerifyFails++;
+      if (fuelVerifyFails >= 2) {
+        log('fuel base moved; relocating');
+        fuelAddr = 0;
+        fuelSource = null;
+        fuelVerifyFails = 0;
+        lastFuelScan = 0;
+        lastFuelVerify = 0;
+      }
     }
   }
   if (!fuelAddr) {
