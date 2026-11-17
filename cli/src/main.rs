@@ -561,6 +561,11 @@ fn main() {
                     engine.shutdown(Duration::from_secs(1));
                     std::process::exit(5);
                 }
+                if error == "not_all_ready" {
+                    eprintln!("host could not start: not all seats ready; exiting");
+                    engine.shutdown(Duration::from_secs(1));
+                    std::process::exit(5);
+                }
                 if matches!(
                     error.as_str(),
                     "memory_unavailable"
