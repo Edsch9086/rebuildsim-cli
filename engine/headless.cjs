@@ -551,7 +551,12 @@ function applyRoom06(buf) {
       // stays 0; never toggle a ready seat off.
       lastReadyClickAt = Date.now();
       readyClicked = true;
-      uiLater(() => globalThis.__ctl.click(646, 688), 300);
+      uiLater(() => {
+        const s = roomSeats.find(x => x.name === OPT.username);
+        if (s && s.ready === false && !matchStarted && !uiBusy) {
+          globalThis.__ctl.click(646, 688);
+        }
+      }, 300);
     }
   }
   return true;
@@ -1410,8 +1415,15 @@ function clickStartWhenReady(attempt = 0, force = false) {
   if (!host) return;
   if (!force && !OPT.start) return;
   const allReady = roomSeats.length > 0 && roomSeats.every(s => s.ready === true);
-  if (allReady || attempt >= 24) {
+  if (allReady) {
     globalThis.__ctl.click(1150, 688);
+    return;
+  }
+  if (attempt >= 24) {
+    const notReady = roomSeats.filter(s => s.ready !== true).map(s => s.name);
+    log('start blocked; seats not ready:', notReady.join(','));
+    emit({ type: 'error', error: 'not_all_ready', detail: notReady.join(',') });
+    startClicked = false;
     return;
   }
   uiLater(() => clickStartWhenReady(attempt + 1, force), 500);
@@ -1457,8 +1469,10 @@ function onTrack(name, params) {
       // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
-      const matchLive = flow.match && clockStarted && lastMatchTime != null
-        && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500;
+      const starting = flow.match && !clockStarted && matchStartedAt
+        && Date.now() - matchStartedAt < 10000;
+      const matchLive = starting || (flow.match && clockStarted && lastMatchTime != null
+        && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500);
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState();
         emitRoom();

@@ -48,15 +48,6 @@ async function makeBot(label){
   await ctx.addInitScript(()=>{
     Object.defineProperty(navigator,'webdriver',{get:()=>undefined});
     window.__room06=null;
-    window.__tracks=[];
-    const track=window.rbTrack;
-    window.rbTrack=(n,p)=>{ try{ window.__tracks.push(String(n)); }catch{} return track?track(n,p):undefined; };
-    window.__rbPad={id:'Xbox 360 Controller (XInput STANDARD GAMEPAD)',index:0,connected:true,
-      mapping:'standard',axes:[0,0,0,0,0,0],
-      buttons:Array.from({length:16},()=>({pressed:false,value:0,touched:false})),timestamp:0};
-    try{
-      Object.defineProperty(navigator,'getGamepads',{configurable:true,value:()=>[window.__rbPad,null,null,null]});
-    }catch{}
     const O=window.WebSocket;
     window.WebSocket=class extends O{ constructor(...a){ super(...a); this.binaryType='arraybuffer';
       this.addEventListener('message',e=>{ try{ const b=e.data instanceof ArrayBuffer?new Uint8Array(e.data):(ArrayBuffer.isView(e.data)?new Uint8Array(e.data.buffer,e.data.byteOffset,e.data.byteLength):null); if(b&&b[0]===0x06)window.__room06=Array.from(b); }catch{} });
@@ -136,23 +127,10 @@ async function driveBlue() {
   after=pose('BlueD');
   console.log('DRIVE canvas',JSON.stringify(delta(before,after)));
   if(moved(after)) return after;
-  // 3) virtual gamepad (y=1 -> axis 1 = -1)
-  await blue.page.evaluate(()=>{
-    const e=new Event('gamepadconnected'); e.gamepad=window.__rbPad;
-    window.dispatchEvent(e);
-    window.__rbPad.axes[1]=-1; window.__rbPad.timestamp=performance.now();
-  });
-  await wait(2200);
-  await blue.page.evaluate(()=>{ window.__rbPad.axes[1]=0; window.__rbPad.timestamp=performance.now(); });
-  await wait(600);
-  after=pose('BlueD');
-  console.log('DRIVE gamepad',JSON.stringify(delta(before,after)));
   return after;
 }
 
 const afterBlue=await driveBlue();
-const blueTracks=await blue.page.evaluate(()=>window.__tracks.filter(n=>/match|room_join/.test(n))).catch(()=>[]);
-console.log('BLUE TRACKS',JSON.stringify(blueTracks));
 console.log('AFTER red',JSON.stringify(afterRed),'blue',JSON.stringify(afterBlue));
 console.log('DELTA red',JSON.stringify(delta(beforeRed,afterRed)),'blue',JSON.stringify(delta(beforeBlue,afterBlue)));
 const ourNames=['RedHost','RedB','RedC','BlueD'];
