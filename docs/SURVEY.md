@@ -485,7 +485,7 @@ SEATS [{"seat":0,"name":"RedHost",...red},
        {"seat":3,"name":"BlueD","team_flag":1,"alliance":"blue"}]
 STATE {"phase":"auto","frame":"alliance",
        "robots":[RedHost red ME, RedB red, RedC red, BlueD blue]}
-DELTA red {"dx":3.785,"dy":0} blue {"dx":-9.682,"dy":0}
+DELTA red {"dx":7.814,"dy":0} blue {"dx":-10.376,"dy":0}
 VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
          "hostMe":true,"robots4":true,"redForward":true,
          "blueForward":true,"frameAlliance":true}
@@ -493,7 +493,7 @@ VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
 
 This proves four unique names occupy four seats, the host's `me` is exactly its
 own robot, the fourth seat is blue from the `0x06` team flag, and a real blue
-browser client pressing `W` moves toward the red side (host/global dx -9.682).
+browser client pressing `W` moves toward the red side (host/global dx -10.376).
 The host is red, so it sees BlueD in the red frame at positive x (opponent
 side); in BlueD's normalized frame the same motion is forward (+x).
 
@@ -521,8 +521,8 @@ spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
 **increases** normalized x — the same coordinates and control response the API
 is designed to provide for red. This test proves the output-frame rotation.
 The 4-client browser test additionally shows the real game inverting blue
-keyboard input: BlueD pressed `W` and moved toward red (global dx -9.682), which
-is +x in its normalized frame. A headless blue *gamepad* seat should still be
+keyboard input: BlueD pressed `W` and moved toward red (global dx -10.376),
+which is +x in its normalized frame. A headless blue *gamepad* seat should still be
 validated on the team server (same-IP limit prevents a second public engine).
 `--field-frame` restores raw global coordinates.
 
