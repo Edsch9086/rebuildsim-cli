@@ -13,7 +13,7 @@ use rebuildsim_cli::engine::{
     Engine, EngineEvent, EngineOptions, GameState, Input, default_engine_path, find_me,
 };
 use std::path::PathBuf;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 #[derive(Debug)]
 struct Args {
@@ -33,8 +33,11 @@ struct Args {
     server: Option<String>,
     binary: bool,
     field_frame: bool,
+    hub_order: Option<String>,
     expect_build: Option<String>,
     no_build_check: bool,
+    state_timeout: u64,
+    exit_on_ws_close: bool,
 }
 
 impl Default for Args {
@@ -56,8 +59,11 @@ impl Default for Args {
             server: None,
             binary: true,
             field_frame: false,
+            hub_order: None,
             expect_build: None,
             no_build_check: false,
+            state_timeout: 5,
+            exit_on_ws_close: true,
         }
     }
 }
@@ -87,8 +93,11 @@ OPTIONS:
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
+  --hub-order <red|blue> force the SHIFT 1 inactive hub (tied AUTO / practice)
   --expect-build <H>  fail fast unless the cached build hash matches H
   --no-build-check    skip the live server BUILD comparison
+  --state-timeout <S> fail (exit 5) if no state arrives for S seconds in a match (default: 5)
+  --allow-ws-close    keep running if the room WebSocket closes (default: exit 6)
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -118,10 +127,18 @@ fn parse_args() -> Result<Args, String> {
             "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
             "--json" => a.binary = false,
             "--field-frame" => a.field_frame = true,
+            "--hub-order" => a.hub_order = Some(it.next().ok_or("--hub-order needs red or blue")?),
             "--expect-build" => {
                 a.expect_build = Some(it.next().ok_or("--expect-build needs a value")?)
             }
             "--no-build-check" => a.no_build_check = true,
+            "--state-timeout" => {
+                a.state_timeout = it
+                    .next()
+                    .ok_or("--state-timeout needs a value")?
+                    .parse()
+                    .map_err(|_| "invalid --state-timeout")?
+            }
             "--emit-hz" => {
                 a.emit_hz = it
                     .next()
@@ -230,6 +247,7 @@ fn main() {
     opts.server = args.server.clone();
     opts.binary = args.binary;
     opts.field_frame = args.field_frame;
+    opts.hub_order = args.hub_order.clone();
     opts.expect_build = args.expect_build.clone();
     opts.no_build_check = args.no_build_check;
 
@@ -248,9 +266,20 @@ fn main() {
         None
     };
     let mut states = 0u64;
+    let state_timeout = Duration::from_secs(args.state_timeout.max(1));
+    let mut in_match = false;
+    let mut last_state = Instant::now();
 
     loop {
-        match engine.next_event() {
+        if in_match && last_state.elapsed() > state_timeout {
+            eprintln!(
+                "state timeout: no state for {:.1}s; engine is stalled or disconnected",
+                last_state.elapsed().as_secs_f64()
+            );
+            engine.kill();
+            std::process::exit(5);
+        }
+        match engine.next_event_timeout(Duration::from_secs(1)) {
             Ok(Some(EngineEvent::Ready { build })) => {
                 eprintln!(
                     "engine ready (build {})",
@@ -277,9 +306,12 @@ fn main() {
             Ok(Some(EngineEvent::Match { phase, time, seats })) => {
                 println!("match started phase={phase} time={time:?}");
                 print_seats(&seats);
+                in_match = true;
+                last_state = Instant::now();
             }
             Ok(Some(EngineEvent::State(state))) => {
                 states += 1;
+                last_state = Instant::now();
                 if args.watch || states == 1 || states % 5 == 0 {
                     print_state(&state, &args.username);
                 }
@@ -318,7 +350,31 @@ fn main() {
             Ok(Some(EngineEvent::Error { error })) => {
                 eprintln!("engine error: {error}");
             }
-            Ok(Some(EngineEvent::Pong { .. })) | Ok(Some(EngineEvent::Other)) => {}
+            Ok(Some(EngineEvent::Ws {
+                state,
+                id,
+                code,
+                reason,
+                room,
+                ..
+            })) => {
+                if state == "close" || state == "error" {
+                    eprintln!(
+                        "engine ws {state} id={id:?} code={code:?} room={room:?} reason={reason:?}"
+                    );
+                }
+                if state == "close" && room == Some(true) && args.exit_on_ws_close {
+                    eprintln!(
+                        "room WebSocket closed; exiting (use --allow-ws-close to keep running)"
+                    );
+                    engine.kill();
+                    std::process::exit(6);
+                }
+            }
+            Ok(Some(EngineEvent::Heartbeat { .. }))
+            | Ok(Some(EngineEvent::Timeout))
+            | Ok(Some(EngineEvent::Pong { .. }))
+            | Ok(Some(EngineEvent::Other)) => {}
             Ok(None) => {
                 let code = engine.wait_code();
                 eprintln!("engine exited code={code:?}");

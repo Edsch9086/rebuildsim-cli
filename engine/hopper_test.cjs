@@ -23,6 +23,14 @@ readline.createInterface({ input: child.stdout }).on('line', (line) => {
   for (let t = 0; t < 300; t++) { await wait(100); if (state && state.time != null && state.time < 162.5) break; }
   const start = state.hopper_fuel;
   console.log('initial hopper', start, 'me.hopper', state.me && state.me.hopper_fuel);
+  // Intake flag: bit 6 at name+0x56.
+  child.stdin.write('{"type":"input","intake":true}\n');
+  await wait(700);
+  const intakeOn = state.intake_active;
+  child.stdin.write('{"type":"input"}\n');
+  await wait(500);
+  const intakeOff = state.intake_active;
+  console.log('intake flags', intakeOn, intakeOff);
   child.stdin.write('{"type":"input","shoot":true}\n');
   let seen = [];
   for (let t = 0; t < 60; t++) {
@@ -33,7 +41,12 @@ readline.createInterface({ input: child.stdout }).on('line', (line) => {
   }
   child.stdin.write('{"type":"input"}\n');
   console.log('hopper sequence', JSON.stringify(seen));
-  console.log('VERDICT', JSON.stringify({ initial8: start === 8, droppedTo0: seen[seen.length - 1] === 0 }));
+  console.log('VERDICT', JSON.stringify({
+    initial8: start === 8,
+    intakeOn: intakeOn === true,
+    intakeOff: intakeOff === false,
+    droppedTo0: seen[seen.length - 1] === 0,
+  }));
   try { child.stdin.write('{"type":"quit"}\n'); } catch {}
   child.kill();
   process.exit(0);

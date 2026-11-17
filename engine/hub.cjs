@@ -7,7 +7,9 @@
 // the status then alternates each shift. A tied AUTO is resolved by the FMS
 // (random), so this module reports the shift status as unknown on a tie.
 
-function computeHub(time, autoRed, autoBlue, alliance) {
+function computeHub(time, autoRed, autoBlue, alliance, forcedOrder) {
+  if (forcedOrder === 'r' || forcedOrder === 'R') forcedOrder = 'red';
+  if (forcedOrder === 'b' || forcedOrder === 'B') forcedOrder = 'blue';
   const out = {
     active: null,
     red_active: null,
@@ -18,7 +20,10 @@ function computeHub(time, autoRed, autoBlue, alliance) {
   };
   if (time == null || !Number.isFinite(time)) return out;
 
-  if (autoRed > autoBlue) {
+  if (forcedOrder === 'red' || forcedOrder === 'blue') {
+    out.red_inactive_first = forcedOrder === 'red';
+    out.source = 'forced';
+  } else if (autoRed > autoBlue) {
     out.red_inactive_first = true;
     out.source = 'auto_score';
   } else if (autoBlue > autoRed) {

@@ -49,6 +49,7 @@ Flags:
 --binary            framed stdout: JSON + packed fuel records
 --field-frame       raw global coordinates (default: alliance-normalized)
 --frame-alliance R|B  diagnostic override for the output frame (testing)
+--hub-order red|blue  force the SHIFT-1 inactive hub (tied AUTO/testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
 --no-build-check    skip the live BUILD fetch (offline debugging)
 --emit-hz <N>       state rate (1..60, default 10)
@@ -75,7 +76,7 @@ stdout is JSON lines only:
  "time_remaining":158.0,"substage_remaining":15.0,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "frame":"alliance","alliance":"red","fuel_count":456,
- "hopper_fuel":8,
+ "hopper_fuel":8,"hopper_capacity":55,"intake_active":false,
  "hub":{"active":true,"red_active":true,"blue_active":true,
         "red_inactive_first":null,"phase":"auto","source":"tie"},
  "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
@@ -110,7 +111,12 @@ Use `--keyboard` (CLI) or omit `--gamepad` (engine) for digital WASD/JL +
 LShift/K/Space controls.
 
 Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
-`{"type":"quit"}`, `{"type":"ping"}`, `{"type":"dump06","path":"/tmp/r.bin"}`.
+`{"type":"quit"}`, `{"type":"ping"}`, `{"type":"dump06","path":"/tmp/r.bin"}`,
+`{"type":"dumpmem","path":"/tmp/mem.bin"}`.
+
+The engine emits a `heartbeat` about once per second and `ws` events for socket
+open/close/error. The close event includes `room: true` when it was the socket
+that carried `0x06`. The Rust CLI uses these for timeout/exit handling.
 
 `--binary` frames stdout with a 16-byte `RSB1` header. Kind 2 carries packed
 fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
@@ -155,10 +161,14 @@ and a Chromium binary; see the header comment.
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
 - `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b). It starts
-  at 8 in the default build; the 55 capacity is not decoded yet.
+  at 8 in the default build. `hopper_capacity` is 55 (build/HUD constant), and
+  `intake_active` is bit 6 of name+0x56. No separate shooting boolean or turret
+  angle is exposed; shooting is a trigger and the hopper count is the observable
+  result.
 - `hub.active` is our hub (already alliance-normalized); `hub.red_active` /
   `hub.blue_active` are diagnostics. A tied AUTO is reported as `null` during
-  shifts because the FMS picks the order.
+  shifts because the FMS picks the order; use `--hub-order red|blue` to force it
+  for practice/test matches.
 - `--spawn` is deferred; infer the spawn from `me`.
 - The CLI is normally a **joiner**: a human spectator hosts, bots join and
   auto-ready, and the human starts the match. `--create`/`--start` are for
@@ -169,6 +179,9 @@ and a Chromium binary; see the header comment.
   process per bot. The **public server has a per-IP connection limit**; a second
   headless engine from the same IP was closed in testing. Use the local server
   or separate IPs for six-bot runs.
+- A dropped room WebSocket is fatal for the current match; the engine reports it
+  but does not auto-reconnect. The Rust CLI exits 5 on state timeout and 6 on
+  room-WS close (disable the latter with `--allow-ws-close`).
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
   fetches the latest build and writes `build.json`; the engine compares it with
   the live page `BUILD` and exits 3 on drift. `--expect-build` checks before

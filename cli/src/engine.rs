@@ -8,6 +8,9 @@ use serde::{Deserialize, Serialize};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::thread;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Clone)]
 pub struct EngineOptions {
@@ -25,6 +28,7 @@ pub struct EngineOptions {
     pub server: Option<String>,
     pub binary: bool,
     pub field_frame: bool,
+    pub hub_order: Option<String>,
     pub expect_build: Option<String>,
     pub no_build_check: bool,
 }
@@ -46,6 +50,7 @@ impl EngineOptions {
             server: None,
             binary: true,
             field_frame: false,
+            hub_order: None,
             expect_build: None,
             no_build_check: false,
         }
@@ -79,6 +84,9 @@ pub struct Robot {
     /// Local hopper fuel count (u32 at name+0x4b in the player struct).
     #[serde(default)]
     pub hopper_fuel: Option<u16>,
+    /// Intake flag (bit 6 of the byte at name+0x56).
+    #[serde(default)]
+    pub intake_active: Option<bool>,
 }
 
 impl Robot {
@@ -174,6 +182,10 @@ pub struct GameState {
     /// Server protocol version from 0x21.
     #[serde(default)]
     pub protocol: Option<u8>,
+    #[serde(default)]
+    pub ws_open: u32,
+    #[serde(default)]
+    pub ws_closed: u32,
     /// "alliance" (default, identical for red and blue) or "field".
     #[serde(default)]
     pub frame: String,
@@ -183,6 +195,12 @@ pub struct GameState {
     /// Our robot's hopper fuel count, if the player struct is readable.
     #[serde(default)]
     pub hopper_fuel: Option<u16>,
+    /// HUD/build hopper capacity (55 in build 4a8a0e8).
+    #[serde(default)]
+    pub hopper_capacity: Option<u16>,
+    /// Our intake flag.
+    #[serde(default)]
+    pub intake_active: Option<bool>,
     #[serde(default)]
     pub hub: HubStatus,
     /// True when `fuel` was delivered on the binary channel (fuel is empty).
@@ -263,8 +281,34 @@ pub enum EngineEvent {
     },
     #[serde(rename = "error")]
     Error { error: String },
+    #[serde(rename = "ws")]
+    Ws {
+        state: String,
+        #[serde(default)]
+        id: Option<u32>,
+        #[serde(default)]
+        code: Option<u16>,
+        #[serde(default)]
+        reason: Option<String>,
+        #[serde(default)]
+        url: Option<String>,
+        #[serde(default)]
+        room: Option<bool>,
+    },
+    #[serde(rename = "heartbeat")]
+    Heartbeat {
+        #[serde(default)]
+        t: f64,
+        #[serde(default)]
+        ws_open: u32,
+        #[serde(default)]
+        ws_closed: u32,
+    },
     #[serde(rename = "pong")]
     Pong { t: f64 },
+    /// Synthetic event returned by `next_event_timeout`; never sent by the engine.
+    #[serde(rename = "__timeout")]
+    Timeout,
     #[serde(other)]
     Other,
 }
@@ -272,10 +316,114 @@ pub enum EngineEvent {
 pub struct Engine {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    rx: Receiver<std::io::Result<EngineEvent>>,
+    _reader: thread::JoinHandle<()>,
+}
+
+fn read_frame(stdout: &mut BufReader<ChildStdout>) -> std::io::Result<Option<(u8, u32, Vec<u8>)>> {
+    use std::io::Read;
+    let mut hdr = [0u8; 16];
+    let mut read = 0;
+    while read < hdr.len() {
+        let n = stdout.read(&mut hdr[read..])?;
+        if n == 0 {
+            return Ok(None);
+        }
+        read += n;
+    }
+    if &hdr[0..4] != b"RSB1" {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("bad engine frame magic: {:02x?}", &hdr[0..4]),
+        ));
+    }
+    let kind = hdr[5];
+    let len = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
+    let seq = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]);
+    let mut payload = vec![0u8; len];
+    stdout.read_exact(&mut payload)?;
+    Ok(Some((kind, seq, payload)))
+}
+
+fn read_next_event(
+    stdout: &mut BufReader<ChildStdout>,
     binary: bool,
-    pending_fuel: Vec<Fuel>,
-    pending_fuel_seq: Option<u32>,
+    pending_fuel: &mut Vec<Fuel>,
+    pending_fuel_seq: &mut Option<u32>,
+) -> std::io::Result<Option<EngineEvent>> {
+    loop {
+        if binary {
+            let Some((kind, seq, payload)) = read_frame(stdout)? else {
+                return Ok(None);
+            };
+            match kind {
+                2 => {
+                    *pending_fuel = decode_fuel(&payload);
+                    *pending_fuel_seq = Some(seq);
+                }
+                1 => {
+                    let line = String::from_utf8_lossy(&payload);
+                    match serde_json::from_str::<EngineEvent>(&line) {
+                        Ok(EngineEvent::State(mut state)) => {
+                            if state.fuel_bin && *pending_fuel_seq == Some(state.seq as u32) {
+                                state.fuel = pending_fuel.clone();
+                            }
+                            return Ok(Some(EngineEvent::State(state)));
+                        }
+                        Ok(event) => return Ok(Some(event)),
+                        Err(err) => {
+                            eprintln!("engine: ignoring malformed frame ({err}): {line}");
+                        }
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            let mut line = String::new();
+            let n = stdout.read_line(&mut line)?;
+            if n == 0 {
+                return Ok(None);
+            }
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<EngineEvent>(line) {
+                Ok(event) => return Ok(Some(event)),
+                Err(err) => {
+                    eprintln!("engine: ignoring malformed line ({err}): {line}");
+                }
+            }
+        }
+    }
+}
+
+fn reader_loop(
+    mut stdout: BufReader<ChildStdout>,
+    binary: bool,
+    tx: Sender<std::io::Result<EngineEvent>>,
+) {
+    let mut pending_fuel = Vec::new();
+    let mut pending_fuel_seq = None;
+    loop {
+        match read_next_event(
+            &mut stdout,
+            binary,
+            &mut pending_fuel,
+            &mut pending_fuel_seq,
+        ) {
+            Ok(Some(event)) => {
+                if tx.send(Ok(event)).is_err() {
+                    break;
+                }
+            }
+            Ok(None) => break,
+            Err(err) => {
+                let _ = tx.send(Err(err));
+                break;
+            }
+        }
+    }
 }
 
 impl Engine {
@@ -313,6 +461,9 @@ impl Engine {
         if opts.field_frame {
             cmd.arg("--field-frame");
         }
+        if let Some(order) = &opts.hub_order {
+            cmd.arg("--hub-order").arg(order);
+        }
         if let Some(build) = &opts.expect_build {
             cmd.arg("--expect-build").arg(build);
         }
@@ -330,13 +481,14 @@ impl Engine {
         let mut child = cmd.spawn()?;
         let stdin = child.stdin.take().expect("piped stdin");
         let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+        let (tx, rx) = mpsc::channel();
+        let binary = opts.binary;
+        let reader = thread::spawn(move || reader_loop(stdout, binary, tx));
         Ok(Self {
             child,
             stdin,
-            stdout,
-            binary: opts.binary,
-            pending_fuel: Vec::new(),
-            pending_fuel_seq: None,
+            rx,
+            _reader: reader,
         })
     }
 
@@ -372,77 +524,39 @@ impl Engine {
         self.send(&serde_json::json!({"type":"quit"}))
     }
 
-    fn next_frame(&mut self) -> std::io::Result<Option<(u8, u32, Vec<u8>)>> {
-        use std::io::Read;
-        let mut hdr = [0u8; 16];
-        let mut read = 0;
-        while read < hdr.len() {
-            let n = self.stdout.read(&mut hdr[read..])?;
-            if n == 0 {
-                return Ok(None);
-            }
-            read += n;
+    pub fn next_event(&mut self) -> std::io::Result<Option<EngineEvent>> {
+        match self.rx.recv() {
+            Ok(Ok(event)) => Ok(Some(event)),
+            Ok(Err(err)) => Err(err),
+            Err(_) => Ok(None),
         }
-        if &hdr[0..4] != b"RSB1" {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("bad engine frame magic: {:02x?}", &hdr[0..4]),
-            ));
-        }
-        let kind = hdr[5];
-        let len = u32::from_le_bytes([hdr[8], hdr[9], hdr[10], hdr[11]]) as usize;
-        let seq = u32::from_le_bytes([hdr[12], hdr[13], hdr[14], hdr[15]]);
-        let mut payload = vec![0u8; len];
-        self.stdout.read_exact(&mut payload)?;
-        Ok(Some((kind, seq, payload)))
     }
 
-    pub fn next_event(&mut self) -> std::io::Result<Option<EngineEvent>> {
+    /// Like `next_event`, but returns `EngineEvent::Timeout` after `timeout`.
+    pub fn next_event_timeout(
+        &mut self,
+        timeout: Duration,
+    ) -> std::io::Result<Option<EngineEvent>> {
+        match self.rx.recv_timeout(timeout) {
+            Ok(Ok(event)) => Ok(Some(event)),
+            Ok(Err(err)) => Err(err),
+            Err(RecvTimeoutError::Timeout) => Ok(Some(EngineEvent::Timeout)),
+            Err(RecvTimeoutError::Disconnected) => Ok(None),
+        }
+    }
+
+    /// Wait for the next state, returning `None` on EOF or timeout.
+    pub fn next_state_timeout(&mut self, timeout: Duration) -> std::io::Result<Option<GameState>> {
+        let deadline = Instant::now() + timeout;
         loop {
-            if self.binary {
-                let Some((kind, seq, payload)) = self.next_frame()? else {
-                    return Ok(None);
-                };
-                match kind {
-                    2 => {
-                        self.pending_fuel = decode_fuel(&payload);
-                        self.pending_fuel_seq = Some(seq);
-                    }
-                    1 => {
-                        let line = String::from_utf8_lossy(&payload);
-                        match serde_json::from_str::<EngineEvent>(&line) {
-                            Ok(EngineEvent::State(mut state)) => {
-                                if state.fuel_bin {
-                                    if self.pending_fuel_seq == Some(state.seq as u32) {
-                                        state.fuel = self.pending_fuel.clone();
-                                    }
-                                }
-                                return Ok(Some(EngineEvent::State(state)));
-                            }
-                            Ok(event) => return Ok(Some(event)),
-                            Err(err) => {
-                                eprintln!("engine: ignoring malformed frame ({err}): {line}");
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            } else {
-                let mut line = String::new();
-                let n = self.stdout.read_line(&mut line)?;
-                if n == 0 {
-                    return Ok(None);
-                }
-                let line = line.trim();
-                if line.is_empty() {
-                    continue;
-                }
-                match serde_json::from_str::<EngineEvent>(line) {
-                    Ok(event) => return Ok(Some(event)),
-                    Err(err) => {
-                        eprintln!("engine: ignoring malformed line ({err}): {line}");
-                    }
-                }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            match self.next_event_timeout(remaining)? {
+                Some(EngineEvent::State(state)) => return Ok(Some(state)),
+                Some(EngineEvent::Timeout) | None => return Ok(None),
+                Some(_) => continue,
             }
         }
     }

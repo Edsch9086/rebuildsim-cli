@@ -252,6 +252,7 @@ const OPT = {
   binary: process.argv.includes('--binary'),
   fieldFrame: process.argv.includes('--field-frame'),
   frameAlliance: getArg('frame-alliance', ''),
+  hubOrder: getArg('hub-order', ''),
   expectBuild: getArg('expect-build', ''),
   noBuildCheck: process.argv.includes('--no-build-check'),
 };
@@ -276,6 +277,7 @@ if (OPT.server) {
 }
 
 const wslog = [];
+let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -437,6 +439,8 @@ const NativeWS = globalThis.WebSocket;
 globalThis.WebSocket = class extends NativeWS {
   constructor(url, protocols) {
     super(url, protocols);
+    const id = ++wsSeq;
+    this.__rbId = id;
     this.binaryType = 'arraybuffer';
     this.addEventListener('message', (e) => {
       let buf = null;
@@ -446,12 +450,26 @@ globalThis.WebSocket = class extends NativeWS {
       if (buf) {
         wslog.push({ dir: 'recv', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
         if (wslog.length > 20000) wslog.splice(0, 10000);
+        if (buf[0] === 0x06 || buf[0] === 0x41 || buf[0] === 0x42) lastRoomWsId = id;
         handleServerFrame(buf);
       }
     });
-    this.addEventListener('open', () => { if (globalThis.__RB_DEBUG) log('WS open', url); });
-    this.addEventListener('close', (e) => log('WS close', e.code, e.reason));
-    this.addEventListener('error', () => { if (globalThis.__RB_DEBUG) log('WS error'); });
+    this.addEventListener('open', () => {
+      wsOpen++;
+      if (globalThis.__RB_DEBUG) log('WS open', id, url);
+      emit({ type: 'ws', state: 'open', id, url });
+    });
+    this.addEventListener('close', (e) => {
+      wsOpen = Math.max(0, wsOpen - 1);
+      wsClosed++;
+      const room = id === lastRoomWsId;
+      log('WS close', id, e.code, e.reason, room ? '(room)' : '');
+      emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason, url, room });
+    });
+    this.addEventListener('error', () => {
+      if (globalThis.__RB_DEBUG) log('WS error', id);
+      emit({ type: 'ws', state: 'error', id, url });
+    });
     const s = this.send.bind(this);
     this.send = (data) => {
       let buf = null;
@@ -729,6 +747,13 @@ function activeAlliance() {
 // engine reports every position/heading/velocity in that same alliance frame,
 // so identical bot logic works on both sides. --field-frame returns raw global
 // coordinates instead.
+function readIntake(addr) {
+  if (!addr || !mem) return null;
+  const a = u8();
+  if (addr + 0x57 >= a.length) return null;
+  return (a[addr + 0x56] & 0x40) !== 0;
+}
+
 function readHopper(addr) {
   if (!addr || !mem) return null;
   const a = u8();
@@ -767,6 +792,7 @@ function readRobots() {
         heading: +allianceHeading(prev.heading).toFixed(4),
         vx: 0, vy: 0, vz: 0, yawRate: 0,
         hopper_fuel: prev.hopper_fuel ?? null,
+        intake_active: prev.intake_active ?? null,
       });
       continue;
     }
@@ -782,7 +808,9 @@ function readRobots() {
       yawRate = dh / dt;
     }
     const hopperFuel = readHopper(p.addr);
-    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading, hopper_fuel: hopperFuel });
+    const intakeActive = readIntake(p.addr);
+    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading,
+      hopper_fuel: hopperFuel, intake_active: intakeActive });
     let alliance = allianceByName.get(name);
     if (!alliance) {
       // Fallback only: spawn side. Prefer the 0x06 seat order when available.
@@ -801,6 +829,7 @@ function readRobots() {
       vx: +ov.x.toFixed(3), vy: +ov.y.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
       hopper_fuel: hopperFuel,
+      intake_active: intakeActive,
     });
   }
   return out;
@@ -878,6 +907,7 @@ if (!OPT.noBuildCheck) {
     .catch((e) => log('build check skipped:', String(e)));
 }
 emit({ type: 'ready', build: buildHash, binary: OPT.binary });
+setInterval(() => emit({ type: 'heartbeat', t: Date.now() / 1000, ws_open: wsOpen, ws_closed: wsClosed }), 1000);
 
 
 function key(type, keyName, code, keyCode) {
@@ -1083,7 +1113,7 @@ setInterval(() => {
   const phase = phaseFor(lastMatchTime);
   const substage = substageFor(lastMatchTime);
   const me = robots.find(r => r.is_me) || null;
-  const hub = computeHub(lastMatchTime, autoScores.red, autoScores.blue, activeAlliance());
+  const hub = computeHub(lastMatchTime, autoScores.red, autoScores.blue, activeAlliance(), OPT.hubOrder);
   const s = seq++;
   const key = `${scores.red}:${scores.blue}`;
   if (key !== lastScoreKey) {
@@ -1104,10 +1134,14 @@ setInterval(() => {
     auto_red_score: autoScores.red, auto_blue_score: autoScores.blue,
     scores: { red: scores.red, blue: scores.blue },
     protocol: protocolVersion,
+    ws_open: wsOpen,
+    ws_closed: wsClosed,
     frame: OPT.fieldFrame ? 'field' : 'alliance',
     alliance: activeAlliance(),
     hub,
     hopper_fuel: me ? me.hopper_fuel : null,
+    hopper_capacity: 55,
+    intake_active: me ? me.intake_active : null,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
@@ -1180,6 +1214,7 @@ rl.on('line', (line) => {
   else if (cmd.type === 'trace') startTrace(cmd);
   else if (cmd.type === 'dump06') { if (lastRoom06) fs.writeFileSync(cmd.path || '/tmp/opencode/room06.bin', lastRoom06); }
   else if (cmd.type === 'dumpws') { fs.writeFileSync(cmd.path || '/tmp/opencode/wsdump.json', JSON.stringify(wslog)); }
+  else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') globalThis.__ctl.click(646, 688);
   else if (cmd.type === 'start') globalThis.__ctl.click(1150, 688);
   else if (cmd.type === 'leave') globalThis.__ctl.click(144, 688);

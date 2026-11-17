@@ -43,6 +43,8 @@ while let Some(state) = engine.next_state()? {
 | `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
 | `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
+| `hopper_capacity` | hopper capacity shown by the HUD (55 in this build) |
+| `intake_active` | boolean; true while the intake trigger is held |
 | `hub.active` | `true`/`false` for our hub, `null` when AUTO was tied during a shift |
 | `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
 | `red_score`, `blue_score`, `auto_*` | game points as displayed on the HUD (integer) |
@@ -144,6 +146,10 @@ pub struct HubStatus {
 `hub.active` is the field a bot should normally use; it is already normalized
 to our alliance, so the bot does not need to know red/blue.
 
+For a tied AUTO or a practice match where the order is known, pass
+`--hub-order red` or `--hub-order blue`. That forces the SHIFT-1 inactive hub
+and sets `source = "forced"`; it applies to all four shifts.
+
 ### `Robot`
 
 ```rust
@@ -158,14 +164,22 @@ pub struct Robot {
     pub yaw_rate: f32,
     pub pose_source: String,  // "predicted" (render copy, ~48 Hz) | "acked"
     pub hopper_fuel: Option<u16>, // that robot's hopper fuel, if readable
+    pub intake_active: Option<bool>, // that robot's intake flag
 }
 ```
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
 name+0x4b. It starts at 8 in the default build (HUD `FUEL 8/55`) and decrements
-while shooting. The hopper **capacity** (55) is a HUD constant in this build and
-is not exposed yet. Remote robots may report their hopper too, but the local
-robot's value is the reliable one.
+while shooting. `hopper_capacity` is `55`; it is a build/HUD constant, not a
+per-robot field. `intake_active` comes from bit 6 of the byte at name+0x56 and
+tracks the intake trigger (true while held). Remote robots may report their
+hopper/intake too, but the local robot's values are the reliable ones.
+
+There is no separate "shooting" boolean in the player struct: shooting is a
+trigger, the hopper count drops as fuel is fired, and a f32 timer at name+0x4f
+changes during/after a shot. A separate turret angle has not been isolated for
+this robot; the game handles aiming internally. Hub lights are visual; use
+`hub.active` for the logical state.
 
 `Fuel`: `id, x, y, z, present`, plus optional `vx, vy, vz, count, flags` merged
 from the server packet. The array length is `fuel_count`, not a fixed 456.
@@ -255,6 +269,22 @@ The fuel frame carries the same sequence number as the following state; that
 state has `"fuel_bin": true` and `"fuel": []`, and the Rust reader reattaches
 the decoded array. See `docs/PROTOCOL.md` §1.7 for the byte layout. Use
 `EngineOptions.binary = false` to get plain JSON lines.
+
+## Timeouts and disconnect handling
+
+The CLI adds two watchdogs on top of the engine:
+
+- `--state-timeout <S>` (default 5): if a match is running and no state arrives
+  for S seconds, print an error and exit `5`. This catches a stalled Node
+  process, a broken stdout pipe, or a silently frozen engine.
+- Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
+  the socket that delivered `0x06` closes. The CLI exits `6` in that case
+  unless `--allow-ws-close` is passed.
+
+The engine itself does not attempt to reconnect to a running match. Rejoining a
+match in progress puts you in as a spectator, so the safe behavior is a clear
+failure; the orchestrator can start a fresh bot for the next match. The
+room-list socket closing is reported but is not fatal.
 
 ## Build pinning
 

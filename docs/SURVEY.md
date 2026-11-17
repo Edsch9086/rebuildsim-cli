@@ -517,10 +517,12 @@ shift status and `source: "tie"` rather than guessing.
 ### Hopper fuel
 
 The local hopper is a u32 at **name+0x4b** in the player struct (and the same
-offset in the render/predicted copy). A memory trace while holding shoot showed
-the value go `8,8,...,7,...,6,...,0`; the HUD read `FUEL 8/55`. The engine emits
-`hopper_fuel` at the top level and on each robot. The 55 capacity is a HUD
-constant in this build and is not decoded yet.
+offset in the render/predicted copy). Memory dumps while holding intake/shoot
+showed the hopper go 8 -> 0 and a flag at **name+0x56 bit 6 (0x40)** turn on
+only while intake is held. The engine emits `hopper_fuel`, `hopper_capacity`
+(55, a build/HUD constant), and `intake_active`. No separate shooting boolean
+or turret angle was isolated: shooting is a trigger, the hopper count drops,
+and a f32 timer at +0x4f changes around the shot.
 
 ### Scores / time / substages
 
@@ -537,6 +539,24 @@ Score fields were validated directly:
 | 131.57 (shift 1) | RED 6 / BLUE 6 | 6 | 6 | 5 | 3 |
 
 The auto columns freeze at the end of auto while the totals continue.
+
+### Timeout and disconnect handling
+
+The Rust CLI was tested against fake engines:
+
+```
+# engine emits match then no states
+state timeout: no state for 2.0s; engine is stalled or disconnected
+exit=5
+
+# engine reports room WS close 1006
+engine ws close id=Some(2) code=Some(1006) room=Some(true)
+room WebSocket closed; exiting (use --allow-ws-close to keep running)
+exit=6
+```
+
+The real engine's reader now runs on a background thread, so `Engine` callers
+can use `next_event_timeout`/`next_state_timeout` instead of blocking forever.
 
 ### Binary fuel + build pin
 

@@ -46,13 +46,14 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); seat 4 blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
-| Hopper fuel | ✅ local hopper count (8 -> 0 while shooting) |
+| Hopper fuel | ✅ count (8 -> 0), capacity 55, intake flag |
 | Hub active/inactive | ✅ computed from clock + AUTO winner; tie reports unknown |
 | Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
 | Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop + substages |
 | Build pin / drift fail-fast | ✅ `build.json` + live check + `--expect-build` |
+| Timeouts / disconnect handling | ✅ state watchdog + room-WS close exit |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | ✅ host UI flow; 25% → 150 fuel validated |

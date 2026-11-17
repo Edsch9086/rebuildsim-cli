@@ -33,6 +33,15 @@ assert.strictEqual(tie.blue_active, null);
 assert.strictEqual(tie.active, null);
 assert.deepStrictEqual([computeHub(135, 4, 4, 'red').red_active, computeHub(135, 4, 4, 'red').blue_active], [true, true]);
 
+// Manual override for a tied AUTO: the operator can force the FMS order.
+const forcedRed = computeHub(120, 4, 4, 'red', 'red');
+assert.strictEqual(forcedRed.source, 'forced');
+assert.strictEqual(forcedRed.red_active, false);
+assert.strictEqual(forcedRed.blue_active, true);
+const forcedBlue = computeHub(120, 4, 4, 'blue', 'blue');
+assert.strictEqual(forcedBlue.red_active, true);
+assert.strictEqual(forcedBlue.blue_active, false);
+
 // No clock yet.
 assert.strictEqual(computeHub(null, 0, 0, 'red').source, 'unknown');
 console.log('hub tests OK');
