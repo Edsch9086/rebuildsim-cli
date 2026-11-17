@@ -110,19 +110,44 @@ const afterRed=pose('RedHost');
 const blue=bots[2];
 const delta=(a,b)=>a&&b?{dx:+(b.x-a.x).toFixed(3),dy:+(b.y-a.y).toFixed(3)}:null;
 async function driveBlue() {
+  const before=pose('BlueD');
+  const moved=(a)=>a&&delta(before,a)&&delta(before,a).dx<-0.3;
+  // 1) normal keyboard after focusing the canvas
   await blue.page.bringToFront();
-  await wait(1000);
+  await wait(1200);
   await blue.page.evaluate(()=>{
     document.activeElement?.blur?.();
     const c=document.querySelector('canvas');
     if(c){ c.setAttribute('tabindex','0'); c.focus?.(); }
   });
   await blue.page.mouse.click(640,360);
-  await blue.page.keyboard.down('w');
-  await wait(2500);
-  await blue.page.keyboard.up('w');
+  await blue.page.keyboard.down('w'); await wait(2200); await blue.page.keyboard.up('w');
+  await wait(800);
+  let after=pose('BlueD');
+  console.log('DRIVE keyboard',JSON.stringify(delta(before,after)));
+  if(moved(after)) return after;
+  // 2) synthetic key events targeted at the canvas (window events break contains())
+  await blue.page.evaluate(()=>{
+    const c=document.querySelector('canvas'); if(!c) return;
+    const ev=(t)=>c.dispatchEvent(new KeyboardEvent(t,{key:'w',code:'KeyW',keyCode:87,which:87,bubbles:true}));
+    ev('keydown'); setTimeout(()=>ev('keyup'),2000);
+  });
+  await wait(2600);
+  after=pose('BlueD');
+  console.log('DRIVE canvas',JSON.stringify(delta(before,after)));
+  if(moved(after)) return after;
+  // 3) virtual gamepad (y=1 -> axis 1 = -1)
+  await blue.page.evaluate(()=>{
+    const e=new Event('gamepadconnected'); e.gamepad=window.__rbPad;
+    window.dispatchEvent(e);
+    window.__rbPad.axes[1]=-1; window.__rbPad.timestamp=performance.now();
+  });
+  await wait(2200);
+  await blue.page.evaluate(()=>{ window.__rbPad.axes[1]=0; window.__rbPad.timestamp=performance.now(); });
   await wait(600);
-  return pose('BlueD');
+  after=pose('BlueD');
+  console.log('DRIVE gamepad',JSON.stringify(delta(before,after)));
+  return after;
 }
 
 const afterBlue=await driveBlue();
