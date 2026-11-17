@@ -5,6 +5,7 @@ const path = require('node:path');
 const nativeFetch = globalThis.fetch;
 const { parseRoom06 } = require('./room06.cjs');
 const { computeHub } = require('./hub.cjs');
+const { phaseFor, substageFor, substageRemaining, classifyMatch } = require('./matchstate.cjs');
 
 const W = 1280, H = 720;
 const store = new Map();
@@ -263,13 +264,23 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
   process.exit(2);
 }
 log('engine options', JSON.stringify(OPT));
-if (!OPT.username || Buffer.byteLength(OPT.username, 'utf8') > 24 || !/^[\x20-\x7e]+$/.test(OPT.username)) {
-  console.error('invalid --username: use 1-24 printable ASCII characters');
-  try { process.stdout.write(JSON.stringify({ type: 'error', error: 'invalid_username' }) + '\n'); } catch {}
-  process.exit(2);
+if (!OPT.username || OPT.username !== OPT.username.trim()
+    || Buffer.byteLength(OPT.username, 'utf8') > 24
+    || !/^[\x20-\x7e]+$/.test(OPT.username)) {
+  console.error('invalid --username: use 1-24 printable ASCII characters without leading/trailing spaces');
+  try { emit({ type: 'error', error: 'invalid_username' }); } catch {}
+  setTimeout(() => process.exit(2), 100);
 }
 if (OPT.spawn) log('note: --spawn is not implemented yet; using the default seat');
-if (OPT.fuel) log('fuel rule request', OPT.fuel);
+if (OPT.fuel) {
+  const fuelValue = String(OPT.fuel).replace('%', '');
+  if (!['25', '50', '75', '100', '125', '150'].includes(fuelValue)) {
+    console.error('invalid --fuel: use 25, 50, 75, 100, 125, or 150');
+    try { emit({ type: 'error', error: 'invalid_fuel' }); } catch {}
+    setTimeout(() => process.exit(2), 100);
+  }
+  log('fuel rule request', OPT.fuel);
+}
 
 if (OPT.server) {
   let host = OPT.server;
@@ -295,6 +306,8 @@ const wslog = [];
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
+let readyClicked = false, startClicked = false, fuelApplied = false;
+let matchWasActive = false;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -308,6 +321,8 @@ let scores = { red: 0, blue: 0 };
 let autoScores = { red: 0, blue: 0 };
 let protocolVersion = null;
 let lastCountdown = null;
+let clockStarted = false;
+let matchEndTimer = null;
 let ourAllianceCache = null;
 
 function addPrintableNames(buf) {
@@ -351,6 +366,13 @@ function emitRoom() {
 function resetMatchState() {
   matchStarted = false;
   flow.match = false;
+  clockStarted = false;
+  matchEndScheduled = false;
+  if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
+  readyClicked = false;
+  startClicked = false;
+  matchWasActive = false;
+  lastRoomKey = '';
   poseCache.clear();
   lastPose.clear();
   fuelAddr = 0;
@@ -358,6 +380,7 @@ function resetMatchState() {
   fuelPacket.clear();
   fuelPacketCount = 0;
   lastMatchTime = null;
+  lastCountdown = null;
   last41 = null;
   scores = { red: 0, blue: 0 };
   autoScores = { red: 0, blue: 0 };
@@ -366,6 +389,14 @@ function resetMatchState() {
 
 function applyRoom06(buf) {
   const parsed = parseRoom06(buf);
+  if (!parsed.seats.length) {
+    log('room state parse produced no seats; keeping last good seat list');
+    return roomSeats;
+  }
+  if (flow.match && roomSeats.length && parsed.seats.length < roomSeats.length) {
+    log('room state lost seats during a match; keeping last good seat list');
+    return roomSeats;
+  }
   roomSeats = parsed.seats;
   if (roomSeats.length) {
     const names = roomSeats.map(s => s.name);
@@ -389,6 +420,18 @@ function applyRoom06(buf) {
     seatsKey = key;
     emit({ type: 'seats', code: roomCode, seats: roomSeats });
   }
+  if (flow.joined) {
+    const ours = roomSeats.some(s => s.name === OPT.username);
+    if (ours !== seated || (ours && role !== 'driver')) {
+      seated = ours;
+      role = ours ? 'driver' : 'spectator';
+      if (ours && !readyClicked) {
+        readyClicked = true;
+        setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+      }
+      emitRoom();
+    }
+  }
   return roomSeats;
 }
 
@@ -409,46 +452,20 @@ function parse41(buf) {
   if (buf.length >= 14) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     lastMatchTime = dv.getFloat32(10, true);
+    if (lastMatchTime > 0) clockStarted = true;
   }
 }
 
-function phaseFor(t) {
-  if (t == null) return 'countdown';
-  if (t > 143.0) return 'auto';
-  if (t > 0.0) return 'teleop';
-  return 'end';
-}
-
-// Match structure verified against the HUD in a full match:
-//   auto        163.0 -> 143.0 (20 s)
-//   field reset 143.0 -> 140.0 (3 s)
-//   transition  140.0 -> 130.0 (10 s)
-//   shift 1..4  130.0 -> 30.0 (four 25 s shifts)
-//   endgame      30.0 -> 0.0 (30 s)
-function substageFor(t) {
-  if (t == null) return 'prematch';
-  if (t > 143.0) return 'auto';
-  if (t > 140.0) return 'field_reset';
-  if (t > 130.0) return 'transition';
-  if (t > 105.0) return 'shift1';
-  if (t > 80.0) return 'shift2';
-  if (t > 55.0) return 'shift3';
-  if (t > 30.0) return 'shift4';
-  if (t > 0.0) return 'endgame';
-  return 'end';
-}
-
-function substageRemaining(t, stage) {
-  if (t == null) return null;
-  const end = { auto: 143, field_reset: 140, transition: 130, shift1: 105,
-    shift2: 80, shift3: 55, shift4: 30, endgame: 0 }[stage];
-  return end == null ? null : Math.max(0, t - end);
-}
-
-function onMatchStart() {
-  if (flow.match) return;
+function onMatchStart(force = false) {
+  if (flow.match && !force) return;
   flow.match = true;
   matchStarted = true;
+  matchWasActive = true;
+  clockStarted = false;
+  matchEndScheduled = false;
+  if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
+  readyClicked = true;
+  startClicked = true;
   poseCache.clear();
   lastPose.clear();
   // Seat order does not change during a match; re-apply it if the room
@@ -519,7 +536,8 @@ globalThis.WebSocket = class extends NativeWS {
           wslog.push({ dir: 'recv', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
           if (wslog.length > 20000) wslog.splice(0, 10000);
         }
-        if (!lastRoomWsId && (buf[0] === 0x41 || buf[0] === 0x42)) lastRoomWsId = id;
+        if (buf[0] === 0x41 || buf[0] === 0x42) lastRoomWsId = id;
+        else if (buf[0] === 0x06 && id > 1) lastRoomWsId = id;
         handleServerFrame(buf);
       }
     });
@@ -614,6 +632,9 @@ let fuelAddr = 0;
 let lastFuelScan = 0;
 let lastFuelVerify = 0;
 let fuelPacketCount = 0;
+let fuelSource = null;
+let fuelVerified = false;
+const FUEL_Z_OFFSET = Math.round(0.045 * 4096);
 let lastFuelLocate = 0;
 const fuelPacket = new Map();
 let initialFuelPacket = null;
@@ -625,6 +646,8 @@ function parseFuelPacket(buf) {
   if (total !== fuelPacketCount) {
     fuelPacketCount = total;
     fuelAddr = 0;
+    fuelSource = null;
+    fuelVerified = false;
     fuelPacket.clear();
   }
   let added = 0;
@@ -637,6 +660,7 @@ function parseFuelPacket(buf) {
       id,
       count: buf.readUInt16LE(off + 2),
       flags: buf.readUInt32LE(off + 8),
+      seen: Date.now(),
       x: buf.readUInt16LE(off + 12),
       y: buf.readUInt16LE(off + 14),
       z: buf.readUInt16LE(off + 16),
@@ -657,13 +681,15 @@ function locateFuelFromPacket() {
   if (!mem || !fuelPacketCount) return 0;
   const a = u8();
   const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
-  const probes = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount).slice(0, 10);
+  const probes = [...fuelPacket.values()]
+    .filter(r => r.id < fuelPacketCount)
+    .sort((a, b) => b.seen - a.seen)
+    .slice(0, 10);
   if (!probes.length) return 0;
-  const pat = Buffer.alloc(6);
+  const pat = Buffer.alloc(4);
   for (const probe of probes) {
     pat.writeUInt16LE(probe.x, 0);
     pat.writeUInt16LE(probe.y, 2);
-    pat.writeUInt16LE(probe.z, 4);
     let pos = 0, hits = 0;
     while (hits++ < 40) {
       const hit = hay.indexOf(pat, pos);
@@ -680,11 +706,14 @@ function locateFuelFromPacket() {
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
         const mz = a[off + 5] | (a[off + 6] << 8);
-        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3 && Math.abs(mz - q.z) <= 3) ok++;
+        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3
+            && Math.abs((mz + FUEL_Z_OFFSET) - q.z) <= 4) ok++;
         total++;
       }
       if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)) {
         fuelAddr = base;
+        fuelSource = 'packet';
+        fuelVerified = true;
         log('fuel array at', '0x' + base.toString(16), 'count', fuelPacketCount);
         return base;
       }
@@ -704,24 +733,28 @@ function validFuelRecord(a, off) {
 function verifyFuelBase() {
   if (!fuelAddr || !fuelPacket.size || !mem) return false;
   const a = u8();
+  const probes = [...fuelPacket.values()]
+    .sort((a, b) => b.seen - a.seen)
+    .slice(0, 5);
   let checked = 0, ok = 0;
-  for (const p of fuelPacket.values()) {
-    if (checked >= 5) break;
+  for (const p of probes) {
     const off = fuelAddr + p.id * 7;
     if (off + 7 > a.length) return false;
     const mx = a[off + 1] | (a[off + 2] << 8);
     const my = a[off + 3] | (a[off + 4] << 8);
     const mz = a[off + 5] | (a[off + 6] << 8);
-    if (Math.abs(mx - p.x) <= 3 && Math.abs(my - p.y) <= 3 && Math.abs(mz - p.z) <= 3) ok++;
+    if (Math.abs(mx - p.x) <= 3 && Math.abs(my - p.y) <= 3
+        && Math.abs((mz + FUEL_Z_OFFSET) - p.z) <= 4) ok++;
     checked++;
   }
-  return checked >= 3 && ok >= Math.ceil(checked * 0.6);
+  const need = Math.min(3, probes.length);
+  return checked >= need && ok >= Math.ceil(checked * 0.6);
 }
 
 function scanFuelRun() {
   if (!mem) return 0;
   const count = fuelPacketCount;
-  if (!count) return 0;
+  if (!count || count < 3) return 0;
   const a = u8();
   const probe = Math.min(count, 64);
   const lim = a.length - probe * 7;
@@ -740,6 +773,8 @@ function scanFuelRun() {
     }
     if (ok) {
       fuelAddr = i;
+      fuelSource = 'scan';
+      fuelVerified = false;
       log('fuel array (scan) at', '0x' + i.toString(16), 'count', count);
       return i;
     }
@@ -766,7 +801,7 @@ function readFuel() {
   if (!fuelAddr || !mem || !fuelPacketCount) return [];
   const a = u8();
   const count = fuelPacketCount;
-  if (fuelAddr + count * 7 > a.length) { fuelAddr = 0; return []; }
+  if (fuelAddr + count * 7 > a.length) { fuelAddr = 0; fuelVerified = false; return []; }
   const out = [];
   for (let i = 0; i < count; i++) {
     const off = fuelAddr + i * 7;
@@ -799,14 +834,17 @@ function findPose(name) {
   const a = u8();
   const cached = poseCache.get(name);
   if (cached != null && cached > 0 && cached + 0x60 < a.length && a[cached - 1] === 1) {
-    const nameLen = Buffer.byteLength(name);
-    const nameBytes = a.subarray(cached, cached + nameLen);
-    if (nameBytes.toString('latin1') !== name || a[cached + nameLen] !== 0) {
+    const nameBuf = Buffer.from(name, 'utf8');
+    const nameLen = nameBuf.length;
+    const cachedName = Buffer.from(a.buffer, a.byteOffset + cached, nameLen);
+    if (!cachedName.equals(nameBuf) || a[cached + nameLen] !== 0) {
       poseCache.delete(name);
     } else {
     const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x23);
     const heading = f32(cached + 0x3f), valid = f32(cached + 0x57);
-    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(heading) && inField(x, y) && Math.abs(heading) <= 20 && valid === 1) {
+    if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+        && Number.isFinite(heading) && Math.abs(z) < 5
+        && inField(x, y) && Math.abs(heading) <= 20 && valid === 1) {
       poseMissUntil.delete(name);
       return { x, y, z, heading, addr: cached, source: (cached >= 0x500000 && cached < 0x530000) ? 'predicted' : 'acked' };
     }
@@ -815,6 +853,7 @@ function findPose(name) {
   }
   const buf = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const needle = Buffer.from(name, 'utf8');
+  const nameLen = needle.length;
   let pos = 0;
   const candidates = [];
   while (true) {
@@ -823,14 +862,14 @@ function findPose(name) {
     pos = occ + 1;
     if (occ < 1 || occ + 0x60 >= a.length) continue;
     if (a[occ - 1] !== 1) continue;
-    const nameLen = Buffer.byteLength(name);
     if (occ + nameLen >= a.length || a[occ + nameLen] !== 0) continue;
     const x = f32(occ + 0x1b);
     const y = f32(occ + 0x1f);
     const z = f32(occ + 0x23);
     const heading = f32(occ + 0x3f);
     const valid = f32(occ + 0x57);
-    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(heading)) continue;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)
+        || !Number.isFinite(heading) || Math.abs(z) >= 5) continue;
     if (!inField(x, y)) continue;
     if (Math.abs(heading) > 20) continue;
     if (valid !== 1) continue;
@@ -953,7 +992,7 @@ function readRobots() {
       hopper_fuel: hopperFuel, intake_active: intakeActive });
     let alliance = allianceByName.get(name);
     if (!alliance) {
-      // Fallback only: spawn side. Prefer the 0x06 seat order when available.
+      // Fallback only: spawn side when no 0x06 seat record is available.
       alliance = p.x < 0 ? 'red' : 'blue';
       allianceByName.set(name, alliance);
       allianceSourceByName.set(name, 'spawn');
@@ -1055,7 +1094,15 @@ if (!OPT.noBuildCheck) {
     })
     .then((html) => {
       const m = html.match(/BUILD\s*=\s*["']([0-9a-f]+)["']/);
-      if (!m) throw new Error('BUILD hash not found');
+      if (!m) {
+        if (OPT.server) {
+          log('build check: no BUILD on local server; continuing (--server)');
+          emit({ type: 'build', build: buildHash, server_build: null, ok: true, skipped: true });
+          bootGame();
+          return;
+        }
+        throw new Error('BUILD hash not found');
+      }
       const live = m[1];
       if (live !== buildHash) {
         log('build drift: assets are', buildHash, 'but server is', live, '- run node prepare.mjs');
@@ -1065,15 +1112,21 @@ if (!OPT.noBuildCheck) {
       }
       emit({ type: 'build', build: buildHash, server_build: live, ok: true });
       log('build check ok', live);
+      bootGame();
     })
     .catch((e) => {
       log('build check failed:', String(e));
+      if (OPT.server) {
+        emit({ type: 'build', build: buildHash, server_build: null, ok: true, skipped: true });
+        bootGame();
+        return;
+      }
       emit({ type: 'error', error: 'build_check_failed', detail: String(e) });
       setTimeout(() => process.exit(3), 100);
     });
 }
-emit({ type: 'ready', build: buildHash, binary: OPT.binary });
 setInterval(() => emit({ type: 'heartbeat', t: Date.now() / 1000, ws_open: wsOpen, ws_closed: wsClosed }), 1000);
+if (OPT.noBuildCheck) bootGame();
 
 
 function key(type, keyName, code, keyCode) {
@@ -1131,9 +1184,9 @@ function applyInput(cmd) {
   setKey('w', y > 0.15); setKey('s', y < -0.15);
   setKey('d', x > 0.15); setKey('a', x < -0.15);
   setKey('l', r > 0.15); setKey('j', r < -0.15);
-  if ('intake' in cmd) setKey('shift', !!cmd.intake);
-  if ('outtake' in cmd) setKey('k', !!cmd.outtake);
-  if ('shoot' in cmd) setKey('space', !!cmd.shoot);
+  setKey('shift', !!cmd.intake);
+  setKey('k', !!cmd.outtake);
+  setKey('space', !!cmd.shoot);
 }
 
 function tapBox(index, x, y, text) {
@@ -1168,13 +1221,18 @@ function onTrack(name, params) {
     } else if (path === '/room') {
       // The room screen is visible. Do not mark the session joined here; the
       // room_join track event carries host/seated/role and fires shortly after.
-      if (flow.match) {
+      if (flow.match || matchWasActive) {
         resetMatchState();
         emitRoom();
+        if (seated) {
+          readyClicked = true;
+          startClicked = false;
+          setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+        }
       }
       if (OPT.debug) log('room screen');
     } else if (path === '/multi/match') {
-      onMatchStart();
+      onMatchStart(false);
     }
   }
   if (name === 'name_prompt' && !flow.name) {
@@ -1199,7 +1257,8 @@ function onTrack(name, params) {
       }
     }, 300);
   }
-  if (name === 'room_join' && !flow.joined) {
+  if (name === 'room_join') {
+    const previousRole = role;
     flow.joined = true;
     host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
@@ -1208,14 +1267,17 @@ function onTrack(name, params) {
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emitRoom();
     const readyAndStart = () => {
-      if (host && OPT.start) {
+      if (host && OPT.start && !startClicked) {
+        startClicked = true;
         setTimeout(() => globalThis.__ctl.click(646, 688), 900);
         setTimeout(() => globalThis.__ctl.click(1150, 688), 1800);
-      } else if (seated) {
+      } else if (seated && (!readyClicked || previousRole !== 'driver')) {
+        readyClicked = true;
         setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
       }
     };
-    if (host && OPT.fuel) {
+    if (host && OPT.fuel && !fuelApplied) {
+      fuelApplied = true;
       // Room settings > Rules > Fuel count. 720p coordinates.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
@@ -1239,7 +1301,7 @@ function onTrack(name, params) {
     }
   }
   if (name === 'match_start') {
-    onMatchStart();
+    onMatchStart(true);
   }
 }
 
@@ -1247,8 +1309,22 @@ globalThis.rbTrack = onTrack;
 globalThis.rbUserProperty = () => {};
 globalThis.rbLoaded = () => {};
 
-const rbGame = require(path.join(ASSET_DIR, 'index.js'));
-rbGame(Module).then(() => log('rbGame resolved')).catch((e) => console.error('rbGame rejected', e));
+let gameBooted = false;
+function bootGame() {
+  if (gameBooted) return;
+  gameBooted = true;
+  emit({ type: 'ready', build: buildHash, binary: OPT.binary });
+  setTimeout(() => {
+    const rbGame = require(path.join(ASSET_DIR, 'index.js'));
+    rbGame(Module)
+      .then(() => log('rbGame resolved'))
+      .catch((e) => {
+        console.error('rbGame rejected', e);
+        try { emit({ type: 'error', error: 'game_boot_failed', detail: String(e) }); } catch {}
+        setTimeout(() => process.exit(1), 100);
+      });
+  }, 0);
+}
 
 // make the virtual gamepad visible to raylib/GLFW after boot
 setTimeout(() => {
@@ -1303,6 +1379,9 @@ setInterval(() => {
     if (!verifyFuelBase()) {
       log('fuel base moved; relocating');
       fuelAddr = 0;
+      fuelVerified = false;
+      lastFuelScan = 0;
+      lastFuelVerify = 0;
     }
   }
   if (!fuelAddr) {
@@ -1310,9 +1389,8 @@ setInterval(() => {
   }
   const robots = readRobots();
   const fuel = readFuel();
-  const countdown = lastCountdown != null && lastCountdown > 0 && (lastMatchTime == null || lastMatchTime <= 0);
-  const phase = countdown ? 'countdown' : phaseFor(lastMatchTime);
-  const substage = countdown ? 'prematch' : substageFor(lastMatchTime);
+  const match = classifyMatch(lastMatchTime, lastCountdown, clockStarted);
+  const { phase, substage, countdown } = match;
   const me = robots.find(r => r.is_me) || null;
   const hub = computeHub(countdown ? null : lastMatchTime, autoScores.red, autoScores.blue, activeAlliance(), OPT.hubOrder);
   const s = seq++;
@@ -1343,14 +1421,19 @@ setInterval(() => {
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: 55,
     intake_active: me ? me.intake_active : null,
-    fuel_ok: fuelPacketCount > 0 && fuel.length === fuelPacketCount,
+    fuel_ok: fuelVerified && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
+    fuel_source: fuelSource,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
   emit(state);
-  if (lastMatchTime != null && lastMatchTime <= 0 && !matchEndScheduled) {
+  if (match.ended && !matchEndScheduled) {
     matchEndScheduled = true;
-    setTimeout(() => { resetMatchState(); matchEndScheduled = false; }, 500);
+    matchEndTimer = setTimeout(() => {
+      resetMatchState();
+      matchEndScheduled = false;
+      matchEndTimer = null;
+    }, 500);
   }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 

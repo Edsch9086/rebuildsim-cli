@@ -66,8 +66,8 @@ build).
 stdout is JSON lines only:
 
 ```json
-{"type":"ready","build":"4a8a0e8","binary":false}
-{"type":"build","build":"4a8a0e8","server_build":"4a8a0e8","ok":true}
+{"type":"build","build":"b654373","server_build":"b654373","ok":true}
+{"type":"ready","build":"b654373","binary":false}
 {"type":"protocol","version":1}
 {"type":"seats","code":"ABCDE","seats":[
   {"seat":0,"name":"TestBot","team_flag":0,"alliance":"red"}]}
@@ -136,7 +136,7 @@ node hub_test.cjs
 node binary_test.cjs
 ```
 
-`room06_test.cjs` parses a synthetic 5-seat packet (seats 0–2 red, seat 3 blue,
+`matchstate_test.cjs` checks the pre-clock countdown/end boundary. `room06_test.cjs` parses a synthetic 5-seat packet (seats 0–2 red, seat 3 blue,
 seat 4 red) and can optionally check a captured packet via
 `RB_ROOM06_FIXTURE`. `frame_test.cjs` forces the blue output frame and
 checks that poses/fuel/heading rotate 180 degrees and that forward input reverses

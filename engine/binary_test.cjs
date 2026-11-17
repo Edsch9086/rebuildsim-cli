@@ -49,11 +49,12 @@ child.stdout.on('data', (d) => {
         if (lastFuelSeq !== state.seq) { console.error('fuel/state seq mismatch', lastFuelSeq, state.seq); child.kill(); process.exit(1); }
         if (prevKind !== 2) { console.error('state did not immediately follow fuel frame'); child.kill(); process.exit(1); }
         if (state.fuel_ok !== true) { console.error('state fuel_ok is not true', state.fuel_ok); child.kill(); process.exit(1); }
+        if (state.fuel_source !== 'packet') { console.error('fuel locator used fallback:', state.fuel_source); child.kill(); process.exit(1); }
         if (fuelFrames < 1) { console.error('no fuel frame before state'); child.kill(); process.exit(1); }
         if (fuelCount !== state.fuel_count) { console.error('fuel count mismatch', fuelCount, state.fuel_count); child.kill(); process.exit(1); }
         console.log('OK binary state', JSON.stringify({
           seq: state.seq, phase: state.phase, substage: state.substage,
-          fuel_count: state.fuel_count, fuel_ok: state.fuel_ok, fuel_bin: state.fuel_bin,
+          fuel_count: state.fuel_count, fuel_ok: state.fuel_ok, fuel_source: state.fuel_source, fuel_bin: state.fuel_bin,
           fuel_frames: fuelFrames, json_frames: jsonFrames,
           scores: state.scores, time: state.time,
         }));

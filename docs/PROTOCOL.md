@@ -1,6 +1,6 @@
 # REBUILD Simulator — observed protocol and memory map
 
-Build `4a8a0e8`. All multi-byte values little-endian. This is a working map, not
+Build `b654373`. All multi-byte values little-endian. This is a working map, not
 an official spec; the server/client may change without notice.
 
 ## 1. WebSocket
@@ -14,7 +14,7 @@ an official spec; the server/client may change without notice.
 ```
 01 6c 00 00 00  44 55 42 52  34 61 38 61 30 65 38  00 ... 00  04
 ^  ^^^^^^^^^^^  ^^^^^^^^^^^  ^^^^^^^^^^^^^^^^^^^
-|  u32 108?     "DUBR"       build hash "4a8a0e8"
+|  u32 108?     "DUBR"       build hash "b654373"
 type
 ```
 
@@ -255,12 +255,16 @@ u16 z             // bottom; add ~0.045 m for centre
 
 - Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
   for that 4-byte pair, set `base = hit - 1 - id*7`, and verify several packet
-  records against the base. This works for any count and heap layout.
+  records against the base. Packet `z` is the fuel centre while the memory
+  record stores the bottom, so compare `mz + 0.045 m` to packet `z`.
+- The cached base is re-verified against packet records every ~2 s and relocated
+  if it moved.
 - Fallback: scan for 64 consecutive valid records (`present ∈ {0,1}`, `z` in
   `[32700, 33200]`), then spot-check a spread of later records. This works for
-  counts above 2,048. Stop after the first 8 MB.
+  counts above 2,048 over the full wasm heap.
 - The packet id equals the array index (id 0 → record 0). The engine emits
-  `fuel_count` and all `count` records, merging packet velocities/flags.
+  `fuel_count`, `fuel_ok`, `fuel_source`, and all `count` records, merging packet
+  velocities/flags in JSON mode.
 
 ### 2.2 Player state struct
 
@@ -387,7 +391,7 @@ engine per bot.
 Engine → CLI:
 
 ```json
-{"type":"ready","build":"4a8a0e8"}
+{"type":"ready","build":"b654373"}
 {"type":"room","code":"URUQM","host":true,"seated":true,"role":"driver"}
 {"type":"match","phase":"auto","time":153.2}
 {"type":"state","seq":123,"t":12.34,
@@ -414,7 +418,7 @@ hub/hopper state, and the Rust `Engine` wrapper.
 The page hardcodes the build hash:
 
 ```html
-var BUILD="4a8a0e8", Module={locateFile:...}
+var BUILD="b654373", Module={locateFile:...}
 ```
 
 and the wasm handshake contains `DUBR` + the same hash. `engine/prepare.mjs`

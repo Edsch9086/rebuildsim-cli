@@ -10,6 +10,7 @@
     "prepare": "node prepare.mjs",
     "test:room06": "node room06_test.cjs",
     "test:hub": "node hub_test.cjs",
+    "test:matchstate": "node matchstate_test.cjs",
     "test:hopper": "node hopper_test.cjs",
     "test:frame": "node frame_test.cjs",
     "test:binary": "node binary_test.cjs",

@@ -1,6 +1,6 @@
 # REBUILD Simulator — technical survey
 
-Surveyed build: `4a8a0e8` (title bar says v4a8a0e8), November 2026.
+Surveyed build: `b654373` (title bar says vb654373), November 2026.
 Assets served from `https://rebuildsim.com/`: `index.html`, `guard.js`, `index.js`
 (250 KB Emscripten glue), `index.wasm` (2.45 MB).
 
@@ -131,11 +131,12 @@ u16 z              // bottom; add ~0.045 m for the centre
 
 The engine locates the array by taking a recent packet record, searching memory
 for its `x,y` pair, deriving `base = hit - 1 - id*7`, and verifying several
-packet records against that base. The cached base is re-verified against packet
-records every ~2 s and relocated if it moved. Validated: a 25% rule produced
+packet records including `z` (memory bottom + 0.045 m = packet centre). The
+cached base is re-verified against packet records every ~2 s and relocated if it
+moved. Validated: a 25% rule produced
 **150 fuel**, a 50% rule 255, and the default build 456. The fallback run scan
 checks up to 64 consecutive records plus a spread of later records, so it is not
-limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, and all `count`
+limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, `fuel_source`, and all `count`
 records (with `present`), and merges the packet's velocities/flags in JSON mode.
 For 4,000+ fuel the JSON state is large, so the engine has an opt-in `--binary`
 framing: packed 7-byte fuel records (plus a `RSB1` header) immediately before the
@@ -447,7 +448,7 @@ fails fast when the live `BUILD` differs.
 
 ## 12. Verification log
 
-These are the reproducible checks used for the current build (`4a8a0e8`).
+These are the reproducible checks used for the current build (`b654373`).
 
 ### 0x06 seat parser
 
@@ -598,8 +599,8 @@ build/protocol failures.
 
 ```
 OK binary state {"seq":0,"phase":"auto","substage":"auto",
- "fuel_count":150,"fuel_ok":true,"fuel_bin":true,"fuel_frames":1,
- "json_frames":19,"scores":{"red":0,"blue":0},"time":163}
+ "fuel_count":150,"fuel_ok":true,"fuel_source":"packet","fuel_bin":true,
+ "fuel_frames":1,"json_frames":19,"scores":{"red":0,"blue":0},"time":163}
 packed records 150
 ```
 
@@ -607,11 +608,11 @@ Build drift checks:
 
 ```
 $ node headless.cjs --expect-build deadbee ...
-build pin failed: assets are 4a8a0e8 but --expect-build is deadbee
+build pin failed: assets are b654373 but --expect-build is deadbee
 exit=3
 
-$ # build.json = deadbee, live page = 4a8a0e8
-build drift: assets are deadbee but server is 4a8a0e8 - run node prepare.mjs
+$ # build.json = deadbee, live page = b654373
+build drift: assets are deadbee but server is b654373 - run node prepare.mjs
 exit=3
 ```
 

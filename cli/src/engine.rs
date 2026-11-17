@@ -136,7 +136,7 @@ pub struct HubStatus {
     /// "auto" | "field_reset" | "transition" | "shift1".."shift4" |
     /// "endgame" | "end" | "unknown"
     pub phase: String,
-    /// "auto_score" | "tie" | "unknown"
+    /// "auto_score" | "tie" | "forced" | "unknown"
     pub source: String,
 }
 
@@ -224,7 +224,7 @@ pub struct GameState {
     /// Our robot's hopper fuel count, if the player struct is readable.
     #[serde(default)]
     pub hopper_fuel: Option<u16>,
-    /// HUD/build hopper capacity (55 in build 4a8a0e8).
+    /// HUD/build hopper capacity (55 in build b654373).
     #[serde(default)]
     pub hopper_capacity: Option<u16>,
     /// Our intake flag.
@@ -238,6 +238,9 @@ pub struct GameState {
     /// False when the engine knows `fuel_count` but could not read the array.
     #[serde(default)]
     pub fuel_ok: bool,
+    /// "packet" when packet records located the array, "scan" for the fallback.
+    #[serde(default)]
+    pub fuel_source: Option<String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -546,6 +549,7 @@ impl Engine {
         if opts.no_build_check {
             cmd.arg("--no-build-check");
         }
+        cmd.arg("--exit-on-stdin-close");
         cmd.arg("--emit-hz").arg(opts.emit_hz.to_string());
         if let Some(dir) = &opts.asset_dir {
             cmd.env("RB_ASSET_DIR", dir);
@@ -624,11 +628,13 @@ impl Engine {
     /// Wait for the next state, returning `None` on EOF or timeout.
     pub fn next_state_timeout(&mut self, timeout: Duration) -> std::io::Result<Option<GameState>> {
         let deadline = Instant::now() + timeout;
+        let mut first = true;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
+            if remaining.is_zero() && !first {
                 return Ok(None);
             }
+            first = false;
             match self.next_event_timeout(remaining)? {
                 Some(EngineEvent::State(state)) => return Ok(Some(state)),
                 Some(EngineEvent::Timeout) | None => return Ok(None),
@@ -643,17 +649,10 @@ impl Engine {
         &mut self,
         timeout: Duration,
     ) -> std::io::Result<Option<NextState>> {
-        let deadline = Instant::now() + timeout;
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return Ok(None);
-            }
-            match self.next_event_timeout(remaining)? {
-                Some(EngineEvent::State(state)) => return Ok(Some(NextState::State(state))),
-                Some(EngineEvent::Timeout) | None => return Ok(None),
-                Some(event) => return Ok(Some(NextState::Event(event))),
-            }
+        match self.next_event_timeout(timeout)? {
+            Some(EngineEvent::State(state)) => Ok(Some(NextState::State(state))),
+            Some(EngineEvent::Timeout) | None => Ok(None),
+            Some(event) => Ok(Some(NextState::Event(event))),
         }
     }
 

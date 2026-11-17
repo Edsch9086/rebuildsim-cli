@@ -112,6 +112,7 @@ pub struct GameState {
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
     pub fuel_bin: bool,          // fuel arrived on the binary channel
     pub fuel_ok: bool,           // false if fuel_count is known but unreadable
+    pub fuel_source: Option<String>, // "packet" | "scan"
     pub ws_open: u32,
     pub ws_closed: u32,
 }
@@ -247,8 +248,8 @@ the first three joiners are red and the next three blue.
 Engine → CLI:
 
 ```json
-{"type":"ready","build":"4a8a0e8","binary":false}
-{"type":"build","build":"4a8a0e8","server_build":"4a8a0e8","ok":true}
+{"type":"build","build":"b654373","server_build":"b654373","ok":true}
+{"type":"ready","build":"b654373","binary":false}
 {"type":"protocol","version":1}
 {"type":"seats","code":"ABCDE","seats":[
   {"seat":0,"name":"MyBot","team_flag":0,"alliance":"red"}]}
@@ -259,7 +260,8 @@ Engine → CLI:
  "time":158.8,"time_remaining":158.8,"substage_remaining":15.8,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "scores":{"red":7,"blue":4},"protocol":1,"frame":"alliance","alliance":"red",
- "fuel_count":456,"fuel_ok":true,"hopper_fuel":8,"hopper_capacity":55,
+ "fuel_count":456,"fuel_ok":true,"fuel_source":"packet",
+ "hopper_fuel":8,"hopper_capacity":55,
  "intake_active":false,"hub":{"active":true,"red_active":true,"blue_active":true,
  "red_inactive_first":null,"phase":"auto","source":"tie"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
@@ -314,6 +316,11 @@ The engine itself does not attempt to reconnect to a running match. Rejoining a
 match in progress puts you in as a spectator, so the safe behavior is a clear
 failure; the orchestrator can start a fresh bot for the next match. The
 room-list socket closing is reported but is not fatal.
+
+CLI exit codes: `0` normal, `1` engine/boot error, `2` bad arguments/config,
+`3` build/asset pin failure, `4` protocol mismatch, `5` state/join timeout or
+reader failure, `6` room WebSocket close, `7` joined as spectator, `8` identity
+failure (duplicate names).
 
 For **lobby** disconnects, `--restart-on-exit` respawns the engine and rejoins
 the same room code after 2 seconds, up to `--max-restarts N` (default 3). It is

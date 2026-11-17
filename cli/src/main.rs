@@ -132,11 +132,23 @@ fn parse_args() -> Result<Args, String> {
             "--watch" => a.watch = true,
             "--debug" => a.debug = true,
             "--keyboard" => a.keyboard = true,
-            "--fuel" => a.fuel = Some(it.next().ok_or("--fuel needs a value")?),
+            "--fuel" => {
+                let value = it.next().ok_or("--fuel needs a value")?;
+                if !["25", "50", "75", "100", "125", "150"].contains(&value.as_str()) {
+                    return Err("--fuel must be one of 25, 50, 75, 100, 125, 150".into());
+                }
+                a.fuel = Some(value);
+            }
             "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
             "--json" => a.binary = false,
             "--field-frame" => a.field_frame = true,
-            "--hub-order" => a.hub_order = Some(it.next().ok_or("--hub-order needs red or blue")?),
+            "--hub-order" => {
+                let value = it.next().ok_or("--hub-order needs red or blue")?;
+                if !matches!(value.as_str(), "red" | "blue" | "r" | "b" | "R" | "B") {
+                    return Err("--hub-order must be red or blue".into());
+                }
+                a.hub_order = Some(value);
+            }
             "--expect-build" => {
                 a.expect_build = Some(it.next().ok_or("--expect-build needs a value")?)
             }
@@ -146,7 +158,10 @@ fn parse_args() -> Result<Args, String> {
                     .next()
                     .ok_or("--state-timeout needs a value")?
                     .parse()
-                    .map_err(|_| "invalid --state-timeout")?
+                    .map_err(|_| "invalid --state-timeout")?;
+                if a.state_timeout == 0 {
+                    return Err("--state-timeout must be at least 1".into());
+                }
             }
             "--allow-ws-close" => a.exit_on_ws_close = false,
             "--restart-on-exit" => a.restart_on_exit = true,
@@ -162,7 +177,10 @@ fn parse_args() -> Result<Args, String> {
                     .next()
                     .ok_or("--join-timeout needs a value")?
                     .parse()
-                    .map_err(|_| "invalid --join-timeout")?
+                    .map_err(|_| "invalid --join-timeout")?;
+                if a.join_timeout == 0 {
+                    return Err("--join-timeout must be at least 1".into());
+                }
             }
             "--emit-hz" => {
                 a.emit_hz = it
@@ -483,7 +501,13 @@ fn main() {
                     }
                 }
                 match code {
-                    Some(0) => break,
+                    Some(0) if joined && !in_match => break,
+                    Some(0) => {
+                        eprintln!(
+                            "engine exited normally before/inside a match; treating as failure"
+                        );
+                        std::process::exit(5);
+                    }
                     Some(c) => std::process::exit(c),
                     None => {
                         eprintln!("engine exited without a status code");
