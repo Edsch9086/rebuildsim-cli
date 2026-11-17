@@ -418,7 +418,7 @@ visible anti-automation check. Treat this as a community service:
 | Live robot pose, velocities, `me` identity | 1–2 days (done; ~48 Hz predicted) |
 | Dynamic fuel count + base locator | 1 day (done) |
 | Virtual gamepad (axes + intake/outtake/shoot) | 1–2 days (done) |
-| 4-bot identity/alliance + blue controls | 2–3 days (done) |
+| 4-bot identity/alliance + blue controls | 2–3 days (identity/frame done; blue gamepad seat pending) |
 | 6-bot identity/alliance on local server | 1–2 days remaining |
 | Rust CLI + JSON API + docs | 3–5 days (mostly done) |
 | Version/build handling + local server | 1–2 days |
@@ -428,7 +428,8 @@ visible anti-automation check. Treat this as a community service:
 | Pure Rust physics reimplementation | months, not recommended |
 
 The networking, lobby automation, fuel, scores/substages, gamepad actions,
-predicted pose, seat decoding, 4-bot identity, and blue controls are solved. The
+predicted pose, seat decoding, and 4-bot identity/frame normalization are solved;
+blue keyboard movement is observed, and the blue gamepad seat is still pending. The
 remaining work is **six-bot validation on the local server** and **version
 drift** (memory signatures/protocol after a game update); the build pin now
 fails fast when the live `BUILD` differs.

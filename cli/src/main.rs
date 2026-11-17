@@ -479,8 +479,9 @@ fn main() {
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
                 print_seats(&seats);
-                room_state_seen = true;
-                join_started = None;
+                if !seats.is_empty() {
+                    room_state_seen = true;
+                }
                 last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Match {
@@ -574,6 +575,8 @@ fn main() {
                         | "build_drift"
                         | "asset_hash_mismatch"
                         | "protocol_mismatch"
+                        | "uncaught"
+                        | "unhandled_rejection"
                 ) {
                     fatal_error = true;
                 }

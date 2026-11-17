@@ -585,6 +585,7 @@ pub fn validate_server(value: &str) -> Result<(), String> {
     if host.is_empty()
         || port.is_empty()
         || port.contains(']')
+        || !port.bytes().all(|b| b.is_ascii_digit())
         || port.parse::<u16>().map(|p| p == 0).unwrap_or(true)
     {
         return Err("server must be HOST:PORT (bracket IPv6 as [addr]:port)".into());

@@ -206,6 +206,8 @@ dependency because the headless engine itself does not need it.
   downloads both assets to temp files, records their SHA-256 hashes, and writes
   `build.json` last. The engine verifies the hashes, compares the cached
   `BUILD` with the live page, and exits 3 on any mismatch or fetch failure.
+  With `--server`, a local server that does not serve the HTML page soft-skips
+  the live check (`ok:true, skipped:true`); use `--no-build-check` offline.
   `--no-build-check` is the explicit offline escape hatch. The `0x21` protocol
   version must be 1 (exit 4 otherwise). The fuel-array locator and player-state
   signature still need re-validation after a game update.

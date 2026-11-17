@@ -326,8 +326,8 @@ The CLI adds several watchdogs on top of the engine:
   the socket that delivered `0x06` closes. The CLI exits `6` in that case
   unless `--allow-ws-close` is passed.
 - If `0x41` stops for 3 s during a live match (or no positive clock arrives
-  within 15 s of match start), the engine emits `match_clock_stalled` and stops
-  states; the state timeout then exits `5`.
+  within 15 s of match start), the engine emits `match_clock_stalled`; the CLI
+  exits `5` immediately (or via the state timeout if states simply stop).
 - A room update that omits the driver seat is debounced for 2.5 s in the lobby
   and 5 s during a match. The CLI waits for the engine's exit `7`; a returning
   seat cancels the demotion and re-emits a driver room event.
