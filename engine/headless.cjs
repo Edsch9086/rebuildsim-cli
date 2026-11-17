@@ -983,6 +983,7 @@ function findFuelArray() {
     fuelAddr = 0;
     fuelSource = null;
   }
+  if (fuelPacketCount < 4 && scanFuelRun()) return fuelAddr;
   if (fuelPacket.size) {
     const b = locateFuelFromPacket();
     if (b) return b;

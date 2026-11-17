@@ -323,6 +323,13 @@ The CLI adds several watchdogs on top of the engine:
 - Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
   the socket that delivered `0x06` closes. The CLI exits `6` in that case
   unless `--allow-ws-close` is passed.
+- If `0x41` stops for 3 s during a live match (or no positive clock arrives
+  within 15 s of match start), the engine emits `match_clock_stalled` and stops
+  states; the state timeout then exits `5`.
+- A room update that omits the driver seat is debounced for 2.5 s. The CLI does
+  not exit immediately; the engine exits `7` only if the seat does not return.
+- Navigating back to the menu/multiplayer screen after joining exits `6`
+  (`left_room`) so the orchestrator can restart or rejoin.
 
 The engine itself does not attempt to reconnect to a running match. Rejoining a
 match in progress puts you in as a spectator, so the safe behavior is a clear
