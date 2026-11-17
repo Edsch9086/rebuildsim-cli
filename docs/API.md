@@ -340,8 +340,9 @@ failure; the orchestrator can start a fresh bot for the next match. The
 room-list socket closing is reported but is not fatal.
 
 CLI exit codes: `0` normal, `1` engine/boot error, `2` bad arguments/config,
-`3` build/asset pin failure, `4` protocol mismatch, `5` state/join timeout or
-reader failure, `6` room WebSocket close, `7` joined as spectator, `8` identity
+`3` build/asset pin failure, `4` protocol mismatch, `5` state/join/heartbeat
+timeout, stalled clock, or blocked host start, `6` room WebSocket close, left
+room, or stuck results screen, `7` joined as spectator, `8` identity
 failure (duplicate names).
 
 For **lobby** disconnects, `--restart-on-exit` respawns the engine and rejoins
