@@ -134,10 +134,11 @@ fn parse_args() -> Result<Args, String> {
             "--keyboard" => a.keyboard = true,
             "--fuel" => {
                 let value = it.next().ok_or("--fuel needs a value")?;
-                if !["25", "50", "75", "100", "125", "150"].contains(&value.as_str()) {
+                let normalized = value.trim_end_matches('%');
+                if !["25", "50", "75", "100", "125", "150"].contains(&normalized) {
                     return Err("--fuel must be one of 25, 50, 75, 100, 125, 150".into());
                 }
-                a.fuel = Some(value);
+                a.fuel = Some(normalized.to_string());
             }
             "--server" => a.server = Some(it.next().ok_or("--server needs a value")?),
             "--json" => a.binary = false,
@@ -196,8 +197,16 @@ fn parse_args() -> Result<Args, String> {
             other => return Err(format!("unknown argument: {other}")),
         }
     }
+    if a.code.is_some() && a.create {
+        return Err("use --code <LOBBY> or --create, not both".to_string());
+    }
     if a.code.is_none() && !a.create {
         return Err("pass --code <LOBBY> or --create".to_string());
+    }
+    if let Some(code) = &a.code {
+        if code.trim().is_empty() {
+            return Err("--code must not be empty".to_string());
+        }
     }
     if a.emit_hz == 0 || a.emit_hz > 60 {
         return Err("--emit-hz must be 1..60".to_string());
@@ -281,7 +290,13 @@ fn restart_engine(opts: &EngineOptions, restarts: &mut u32, max_restarts: u32) -
         *restarts, max_restarts
     );
     std::thread::sleep(Duration::from_secs(2));
-    Some(spawn_engine(opts))
+    match Engine::spawn(opts) {
+        Ok(engine) => Some(engine),
+        Err(e) => {
+            eprintln!("restart failed: {e}");
+            None
+        }
+    }
 }
 
 fn main() {
@@ -333,6 +348,7 @@ fn main() {
     let mut joined = false;
     let mut join_started = Instant::now();
     let mut last_state = Instant::now();
+    let mut match_seen = false;
 
     loop {
         if !joined && join_started.elapsed() > Duration::from_secs(args.join_timeout.max(1)) {
@@ -372,6 +388,7 @@ fn main() {
                 );
                 print_seats(&seats);
                 joined = true;
+                match_seen = false;
                 if !seated {
                     eprintln!("joined as a spectator; this bot cannot drive");
                     engine.shutdown(Duration::from_secs(1));
@@ -391,14 +408,22 @@ fn main() {
                 println!("match started phase={phase} substage={substage} time={time:?}");
                 print_seats(&seats);
                 in_match = true;
+                match_seen = true;
                 restarts = 0;
                 last_state = Instant::now();
+                if demo.is_some() {
+                    demo = Some(Demo::default());
+                }
             }
             Ok(Some(EngineEvent::State(state))) => {
                 states += 1;
                 last_state = Instant::now();
                 if state.phase == "end" {
                     in_match = false;
+                    match_seen = true;
+                } else {
+                    in_match = true;
+                    match_seen = true;
                 }
                 if args.watch || states == 1 || states % 5 == 0 {
                     print_state(&state, &args.username);
@@ -437,8 +462,11 @@ fn main() {
             })) => {
                 println!("score red={red} blue={blue} auto={auto_red}/{auto_blue}");
             }
-            Ok(Some(EngineEvent::Error { error })) => {
-                eprintln!("engine error: {error}");
+            Ok(Some(EngineEvent::Error { error, detail })) => {
+                eprintln!(
+                    "engine error: {error}{}",
+                    detail.map(|d| format!(" ({d})")).unwrap_or_default()
+                );
             }
             Ok(Some(EngineEvent::Ws {
                 state,
@@ -458,7 +486,7 @@ fn main() {
                         "room WebSocket closed; exiting (use --allow-ws-close to keep running)"
                     );
                     engine.shutdown(Duration::from_secs(1));
-                    if args.restart_on_exit && args.code.is_some() && !in_match {
+                    if args.restart_on_exit && args.code.is_some() && !in_match && !match_seen {
                         if let Some(new_engine) =
                             restart_engine(&opts, &mut restarts, args.max_restarts)
                         {
@@ -485,6 +513,7 @@ fn main() {
                 let retryable = args.restart_on_exit
                     && args.code.is_some()
                     && !in_match
+                    && !match_seen
                     && matches!(code, Some(1));
                 if retryable {
                     if let Some(new_engine) =

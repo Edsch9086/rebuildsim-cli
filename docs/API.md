@@ -27,10 +27,12 @@ while let Some(state) = engine.next_state()? {
 
 `Engine` also provides `next_event_timeout`, `next_state_timeout`, and
 `next_state_or_event_timeout` (returns `NextState::State` or
-`NextState::Event`). Use the event-aware variants if you need to observe
-`Error`, `Ws`, or `Room` events. `next_state()` is the simple blocking helper
-and intentionally drops non-state events. The reader runs on a background
-thread, so a stalled engine cannot block the caller indefinitely.
+`NextState::Event`). Use the timeout variants for bounded waits and the
+event-aware variant if you need to observe `Error`, `Ws`, or `Room` events.
+`next_state()` is the simple blocking helper; it intentionally drops non-state
+events and can block indefinitely if the engine stays alive but silent. The
+background reader prevents stdout parsing from blocking the caller, but only the
+timeout variants provide a deadline.
 
 ## Units and conventions
 
@@ -101,6 +103,7 @@ pub struct GameState {
     pub auto_blue_score: u16,
     pub protocol: Option<u8>,
     pub frame: String,        // "alliance" (default) | "field" | "unknown"
+                              // "unknown" means raw global until 0x06/pose resolves
     pub alliance: String,     // diagnostic only; "unknown" until resolved
     pub hub: HubStatus,
     pub hopper_fuel: Option<u16>,
@@ -263,7 +266,7 @@ Engine → CLI:
  "fuel_count":456,"fuel_ok":true,"fuel_source":"packet",
  "hopper_fuel":8,"hopper_capacity":55,
  "intake_active":false,"hub":{"active":true,"red_active":true,"blue_active":true,
- "red_inactive_first":null,"phase":"auto","source":"tie"},
+ "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.40,
        "z":0.0,"heading":-1.18,"vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0},
@@ -324,9 +327,9 @@ failure (duplicate names).
 
 For **lobby** disconnects, `--restart-on-exit` respawns the engine and rejoins
 the same room code after 2 seconds, up to `--max-restarts N` (default 3). It is
-join-mode only (not with `--create`) and is disabled once a match starts, so it
-never turns a driver bot into a spectator mid-match. Build/protocol failures
-(exit 3/4) are not retried.
+join-mode only (not with `--create`) and is disabled after a match starts until
+a fresh `room` event arrives, so it never turns a driver bot into a spectator
+mid-match. Build/protocol failures (exit 3/4) are not retried.
 
 ## Build pinning
 

@@ -28,7 +28,7 @@ The binary protocol is custom, not JSON. Packet types observed:
 | `0x31` | C→S | 3 | ack |
 | `0x32` | S→C | 312–611 | room list (chunked) |
 | `0x10` | C→S | 25 | set display name (24-byte field) |
-| `0x06` | S→C | 308 | room state: code, host, seats, names, teams, robots, spawns |
+| `0x06` | S→C | 306–340+ | room state: code, host, seats, names, teams, robots, spawns |
 | `0x13` | S→C | 90–175 | room info / join result |
 | `0x07` | C→S | 14 | seat/robot/spawn selection (join) |
 | `0x40` | C→S | 12 | input frame (see below) |
@@ -458,10 +458,10 @@ packet can be supplied with `RB_ROOM06_FIXTURE`. The captured result from the
 4-player test was:
 
 ```
-seat 0 HostA  team=0 red
-seat 1 RedB   team=0 red
-seat 2 RedC   team=0 red
-seat 3 BlueD  team=1 blue
+seat 0 RedHost team=0 red
+seat 1 RedB    team=0 red
+seat 2 RedC    team=0 red
+seat 3 BlueD   team=1 blue
 room06 tests OK
 ```
 

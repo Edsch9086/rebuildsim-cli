@@ -30,15 +30,19 @@ function substageRemaining(t, stage) {
   return end == null ? null : Math.max(0, t - end);
 }
 
-// The 0x41 countdown at +6 can be non-zero before the match clock starts. That
-// state is PREMATCH, not match end; only a clock that has actually started can
-// trigger an end-of-match reset.
+// The clock can be absent or 0 before the match starts, with countdown either
+// non-zero (counting down) or 0 (between countdown and first clock sample).
+// Both are PREMATCH, not match end. Only a clock that has actually been
+// positive can trigger an end-of-match transition; allow a small epsilon for
+// the last packet (0.01-0.03) instead of requiring exactly 0.
+const END_EPSILON = 0.05;
+
 function classifyMatch(t, countdown, clockStarted) {
-  const inCountdown = countdown != null && countdown > 0 && (t == null || t <= 0);
-  const phase = inCountdown ? 'countdown' : phaseFor(t);
-  const substage = inCountdown ? 'prematch' : substageFor(t);
-  const ended = t != null && t <= 0 && clockStarted && !inCountdown;
-  return { phase, substage, countdown: inCountdown, ended };
+  const prematch = !clockStarted && (t == null || t <= END_EPSILON);
+  const phase = prematch ? 'countdown' : phaseFor(t);
+  const substage = prematch ? 'prematch' : substageFor(t);
+  const ended = clockStarted && t != null && t <= END_EPSILON;
+  return { phase, substage, countdown: prematch, ended };
 }
 
 module.exports = { phaseFor, substageFor, substageRemaining, classifyMatch };

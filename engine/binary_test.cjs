@@ -46,27 +46,34 @@ child.stdout.on('data', (d) => {
         state = obj;
         if (!state.fuel_bin) { console.error('state did not set fuel_bin'); child.kill(); process.exit(1); }
         if (state.fuel.length !== 0) { console.error('binary state still includes fuel array'); child.kill(); process.exit(1); }
-        if (lastFuelSeq !== state.seq) { console.error('fuel/state seq mismatch', lastFuelSeq, state.seq); child.kill(); process.exit(1); }
-        if (prevKind !== 2) { console.error('state did not immediately follow fuel frame'); child.kill(); process.exit(1); }
-        if (state.fuel_ok !== true) { console.error('state fuel_ok is not true', state.fuel_ok); child.kill(); process.exit(1); }
-        if (state.fuel_source !== 'packet') { console.error('fuel locator used fallback:', state.fuel_source); child.kill(); process.exit(1); }
-        if (fuelFrames < 1) { console.error('no fuel frame before state'); child.kill(); process.exit(1); }
-        if (fuelCount !== state.fuel_count) { console.error('fuel count mismatch', fuelCount, state.fuel_count); child.kill(); process.exit(1); }
-        console.log('OK binary state', JSON.stringify({
-          seq: state.seq, phase: state.phase, substage: state.substage,
-          fuel_count: state.fuel_count, fuel_ok: state.fuel_ok, fuel_source: state.fuel_source, fuel_bin: state.fuel_bin,
-          fuel_frames: fuelFrames, json_frames: jsonFrames,
-          scores: state.scores, time: state.time,
-        }));
-        console.log('packed records', fuelCount);
-        done = true;
-        child.kill();
-        process.exit(0);
+        // Startup emits states immediately; the first 0x42 packet (and the
+        // locator) may not have arrived yet. Wait for a fully populated state.
+        if (fuelFrames >= 1 && fuelCount > 0 && state.fuel_count > 0 && state.fuel_ok === true) {
+          if (lastFuelSeq !== state.seq) { console.error('fuel/state seq mismatch', lastFuelSeq, state.seq); child.kill(); process.exit(1); }
+          if (prevKind !== 2) { console.error('state did not immediately follow fuel frame'); child.kill(); process.exit(1); }
+          if (state.fuel_source !== 'packet') { console.error('fuel locator used fallback:', state.fuel_source); child.kill(); process.exit(1); }
+          if (fuelCount !== state.fuel_count) { console.error('fuel count mismatch', fuelCount, state.fuel_count); child.kill(); process.exit(1); }
+          console.log('OK binary state', JSON.stringify({
+            seq: state.seq, phase: state.phase, substage: state.substage,
+            fuel_count: state.fuel_count, fuel_ok: state.fuel_ok, fuel_source: state.fuel_source, fuel_bin: state.fuel_bin,
+            fuel_frames: fuelFrames, json_frames: jsonFrames,
+            scores: state.scores, time: state.time,
+          }));
+          console.log('packed records', fuelCount);
+          done = true;
+          child.kill();
+          process.exit(0);
+        }
       }
     } else if (kind === 2) {
       fuelFrames++;
       fuelCount = payload.readUInt16LE(0);
-      if (fuelCount < 1) { console.error('empty fuel frame'); child.kill(); process.exit(1); }
+      if (fuelCount === 0) {
+        // Warm-up state before the first fuel packet; framing must still be valid.
+        if (payload.length !== 8) { console.error('bad empty fuel payload length', payload.length); child.kill(); process.exit(1); }
+        lastFuelSeq = seq;
+        continue;
+      }
       if (payload.readUInt16LE(2) !== 7) { console.error('bad record size'); child.kill(); process.exit(1); }
       if (payload.length !== 8 + fuelCount * 7) { console.error('bad fuel payload length', payload.length); child.kill(); process.exit(1); }
       // check the first record is a valid fixed-point position

@@ -201,7 +201,7 @@ offset 4  u8 framing version (1)
 offset 5  u8 kind: 1 = JSON event, 2 = packed fuel
 offset 6  u16 reserved (0)
 offset 8  u32 payload length
-offset 12 u32 state sequence (0 for non-state events)
+offset 12 u32 state sequence (state/score frames; 0 for other events)
 payload
 ```
 
@@ -428,6 +428,9 @@ and the wasm handshake contains `DUBR` + the same hash. `engine/prepare.mjs`
 parses the page, downloads the matching `index.js`/`index.wasm`, records their
 SHA-256 hashes, and writes `build.json` last. The engine verifies the hashes and
 compares the cached `BUILD` with the live page; any mismatch or fetch failure
-exits 3. The observed `0x21 00 01 00 00` carries only protocol version 1; the
+exits 3. The one exception is `--server`: a local server that does not serve the
+HTML page soft-skips the live check (`ok:true, skipped:true`), because local
+WebSocket-only test servers are expected. Pass `--no-build-check` explicitly
+when running fully offline. The observed `0x21 00 01 00 00` carries only protocol version 1; the
 hello carries the build hash, but no separate build-mismatch packet has been
 observed.

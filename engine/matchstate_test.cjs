@@ -18,10 +18,22 @@ assert.strictEqual(pre.substage, 'prematch');
 assert.strictEqual(pre.ended, false);
 assert.strictEqual(pre.countdown, true);
 
-// Once the clock starts, clock=0 means the match ended.
+// A pre-clock packet with a zero countdown/clock is still PREMATCH, not end.
+const preZero = classifyMatch(0, 0, false);
+assert.strictEqual(preZero.phase, 'countdown');
+assert.strictEqual(preZero.substage, 'prematch');
+assert.strictEqual(preZero.ended, false);
+
+const preNull = classifyMatch(null, 0, false);
+assert.strictEqual(preNull.phase, 'countdown');
+assert.strictEqual(preNull.ended, false);
+
+// Once the clock starts, clock=0 (and the final sub-epsilon clock) means end.
 const end = classifyMatch(0, 0, true);
 assert.strictEqual(end.phase, 'end');
 assert.strictEqual(end.ended, true);
+assert.strictEqual(classifyMatch(0.02, 0, true).ended, true);
+assert.strictEqual(classifyMatch(0.2, 0, true).ended, false);
 
 // A live match is not ended.
 assert.strictEqual(classifyMatch(120, 0, true).ended, false);

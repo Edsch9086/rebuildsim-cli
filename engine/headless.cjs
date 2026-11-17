@@ -3,6 +3,7 @@ const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const nativeFetch = globalThis.fetch;
+const BIN_MAGIC = Buffer.from('RSB1');
 const { parseRoom06 } = require('./room06.cjs');
 const { computeHub } = require('./hub.cjs');
 const { phaseFor, substageFor, substageRemaining, classifyMatch } = require('./matchstate.cjs');
@@ -233,7 +234,9 @@ globalThis.WebGL2RenderingContext = class { static [Symbol.hasInstance](x) { ret
 // Engine: args, WebSocket tap, wasm boot, UI flow, state extraction, stdin API
 // ---------------------------------------------------------------------------
 
-const ASSET_DIR = process.env.RB_ASSET_DIR || path.join(__dirname, 'cache');
+const assetArg = process.argv.indexOf('--asset-dir');
+const ASSET_DIR = (assetArg >= 0 ? process.argv[assetArg + 1] : '')
+  || process.env.RB_ASSET_DIR || path.join(__dirname, 'cache');
 const BUILD_FILE = path.join(ASSET_DIR, 'build.json');
 
 function getArg(name, def = '') {
@@ -306,7 +309,7 @@ const wslog = [];
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
-let readyClicked = false, startClicked = false, fuelApplied = false;
+let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let matchWasActive = false;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
@@ -356,8 +359,16 @@ function failIdentity(reason, detail) {
   emit({ type: 'error', error: reason, detail: detail || '' });
   setTimeout(() => process.exit(8), 100);
 }
+let joinFatal = false;
+function failJoin(reason, detail) {
+  if (identityFatal || joinFatal) return;
+  joinFatal = true;
+  log('join failure:', reason, detail || '');
+  emit({ type: 'error', error: reason, detail: detail || '' });
+  setTimeout(() => process.exit(2), 100);
+}
 function emitRoom() {
-  const key = `${roomCode}|${host}|${seated}|${role}|${roomSeats.map(s => `${s.seat}:${s.name}:${s.alliance}`).join(',')}`;
+  const key = `${roomCode}|${host}|${seated}|${role}|${roomSeats.map(s => `${s.seat}:${s.name}:${s.robot_id}:${s.team_flag}:${s.alliance}`).join(',')}`;
   if (key === lastRoomKey) return;
   lastRoomKey = key;
   emit({ type: 'room', code: roomCode, host, seated, role, seats: roomSeats });
@@ -377,8 +388,16 @@ function resetMatchState() {
   lastPose.clear();
   fuelAddr = 0;
   lastFuelScan = 0;
+  lastFuelVerify = 0;
+  fuelSource = null;
+  fuelVerified = false;
   fuelPacket.clear();
   fuelPacketCount = 0;
+  allianceByName.clear();
+  allianceSourceByName.clear();
+  ourAllianceCache = null;
+  cancelUiTimers();
+  releaseInputs();
   lastMatchTime = null;
   lastCountdown = null;
   last41 = null;
@@ -387,26 +406,54 @@ function resetMatchState() {
   lastScoreKey = '';
 }
 
+function clearRoomIdentity() {
+  roomSeats = [];
+  roomNames = new Set();
+  allianceByName.clear();
+  allianceSourceByName.clear();
+  ourAllianceCache = null;
+  seatsKey = '';
+  lastRoomKey = '';
+}
+
 function applyRoom06(buf) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
-    log('room state parse produced no seats; keeping last good seat list');
+    if (flow.match && roomSeats.length) {
+      log('room state parse produced no seats during a match; keeping last good seat list');
+      return roomSeats;
+    }
+    log('room state parse produced no seats; clearing stale seat list');
+    clearRoomIdentity();
     return roomSeats;
   }
-  if (flow.match && roomSeats.length && parsed.seats.length < roomSeats.length) {
-    log('room state lost seats during a match; keeping last good seat list');
-    return roomSeats;
+  if (flow.match && roomSeats.length) {
+    const oursNow = parsed.seats.some(s => s.name === OPT.username);
+    const oursBefore = roomSeats.some(s => s.name === OPT.username);
+    if (parsed.seats.length < roomSeats.length || (oursBefore && !oursNow)) {
+      log('room state lost seats during a match; keeping last good seat list');
+      return roomSeats;
+    }
   }
   roomSeats = parsed.seats;
   if (roomSeats.length) {
     const names = roomSeats.map(s => s.name);
-    if (names.length > 1 && new Set(names).size !== names.length) {
+    // Name-keyed identity is only ambiguous when OUR name is duplicated. Two
+    // unrelated humans with the same name must not kill every bot in the room.
+    if (names.filter(n => n === OPT.username).length > 1) {
       failIdentity('duplicate_names', names.join(','));
       return roomSeats;
     }
     // The player records are the real occupants; drop printable-run noise.
     roomNames = new Set(names);
     if (OPT.username) roomNames.add(OPT.username);
+    const seatNames = new Set(names);
+    for (const n of [...allianceByName.keys()]) {
+      if (!seatNames.has(n)) {
+        allianceByName.delete(n);
+        allianceSourceByName.delete(n);
+      }
+    }
   }
   // The team byte (0 red, 1 blue) is authoritative when present; the seat
   // order fallback (first 3 red, next 3 blue) covers older builds.
@@ -415,19 +462,23 @@ function applyRoom06(buf) {
     allianceSourceByName.set(seat.name, 'room');
     if (seat.name === OPT.username) ourAllianceCache = seat.alliance;
   }
-  const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.alliance}`).join('|');
+  const key = roomSeats.map(s => `${s.seat}:${s.name}:${s.robot_id}:${s.team_flag}:${s.alliance}`).join('|');
   if (key !== seatsKey) {
     seatsKey = key;
     emit({ type: 'seats', code: roomCode, seats: roomSeats });
   }
   if (flow.joined) {
     const ours = roomSeats.some(s => s.name === OPT.username);
+    if (flow.match && seated && !ours) {
+      log('ignoring apparent seat loss during a match');
+      return roomSeats;
+    }
     if (ours !== seated || (ours && role !== 'driver')) {
       seated = ours;
       role = ours ? 'driver' : 'spectator';
-      if (ours && !readyClicked) {
+      if (ours && !readyClicked && !uiBusy) {
         readyClicked = true;
-        setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
       }
       emitRoom();
     }
@@ -456,44 +507,52 @@ function parse41(buf) {
   }
 }
 
-function onMatchStart(force = false) {
-  if (flow.match && !force) return;
+function onMatchStart() {
+  const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
+  // Match start is idempotent per match: /multi/match and match_start both fire,
+  // and a second call during the countdown must not wipe the first clock/fuel
+  // packets. A new match after an ended one (no /room screen) is allowed.
+  if (flow.match && !ended) return;
+  resetMatchState();
   flow.match = true;
   matchStarted = true;
   matchWasActive = true;
-  clockStarted = false;
-  matchEndScheduled = false;
-  if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
   readyClicked = true;
   startClicked = true;
-  poseCache.clear();
-  lastPose.clear();
-  // Seat order does not change during a match; re-apply it if the room
-  // packet arrived before the match. Do not clear it (that would drop the
-  // only authoritative alliance source back to the spawn heuristic).
+  // Seat order does not change during a match; re-apply it after the reset
+  // cleared the identity maps.
   if (lastRoom06) applyRoom06(lastRoom06);
-  fuelAddr = 0;
-  lastFuelScan = 0;
-  lastFuelVerify = 0;
-  fuelPacket.clear();
-  fuelPacketCount = 0;
-  lastMatchTime = null;
-  lastCountdown = null;
-  last41 = null;
-  scores = { red: 0, blue: 0 };
-  autoScores = { red: 0, blue: 0 };
-  lastScoreKey = '';
-  matchEndScheduled = false;
-  emit({ type: 'match', phase: phaseFor(lastMatchTime), substage: substageFor(lastMatchTime),
-    time: lastMatchTime, seats: roomSeats });
+  emit({ type: 'match', phase: 'countdown', substage: 'prematch',
+    time: null, seats: roomSeats });
 }
 
-function handleServerFrame(buf) {
+function handleServerFrame(buf, wsId) {
   if (!buf || !buf.length) return;
   const type = buf[0];
   if (type === 0x06) {
+    // The room-list socket can carry room-state-looking frames too; only the
+    // second (room) connection is authoritative.
+    if (wsId === 1) {
+      log('ignoring 0x06 from the room-list socket');
+      return;
+    }
+    if (lastRoomWsId && wsId && wsId !== lastRoomWsId) {
+      log('ignoring 0x06 from a stale socket', wsId);
+      return;
+    }
     // room state: room code at 1..5, then seat records in seat order.
-    roomCode = buf.subarray(1, 6).toString('latin1');
+    const nextCode = buf.subarray(1, 6).toString('latin1');
+    if (roomCode && nextCode && nextCode !== roomCode) {
+      log('room code changed', roomCode, '->', nextCode);
+      clearRoomIdentity();
+      lastRoom06 = null;
+      resetMatchState();
+    }
+    roomCode = nextCode || roomCode;
+    if (OPT.code && roomCode && roomCode.toUpperCase() !== OPT.code.toUpperCase()) {
+      failJoin('room_code_mismatch', `joined ${roomCode}, expected ${OPT.code}`);
+      return;
+    }
     lastRoom06 = Buffer.from(buf);
     addPrintableNames(buf);
     applyRoom06(buf);
@@ -507,7 +566,7 @@ function handleServerFrame(buf) {
     if (buf.length >= 3 && buf[2] !== 1) {
       log('protocol version mismatch: server', buf[2], 'engine expects 1');
       emit({ type: 'error', error: 'protocol_mismatch', server: buf[2], expected: 1 });
-      process.exit(4);
+      setTimeout(() => process.exit(4), 100);
     }
     const v = buf.length >= 3 ? buf[2] : null;
     if (v !== protocolVersion) {
@@ -538,7 +597,7 @@ globalThis.WebSocket = class extends NativeWS {
         }
         if (buf[0] === 0x41 || buf[0] === 0x42) lastRoomWsId = id;
         else if (buf[0] === 0x06 && id > 1) lastRoomWsId = id;
-        handleServerFrame(buf);
+        handleServerFrame(buf, id);
       }
     });
     this.addEventListener('open', () => {
@@ -754,8 +813,36 @@ function verifyFuelBase() {
 function scanFuelRun() {
   if (!mem) return 0;
   const count = fuelPacketCount;
-  if (!count || count < 3) return 0;
+  if (!count) return 0;
   const a = u8();
+  if (count < 3) {
+    // Tiny matches have no long run to anchor on, so match every packet
+    // record (x/y/z and present) exactly. This is stronger than the
+    // single-hit packet locator.
+    const probes = [...fuelPacket.values()].filter(r => r.id < count);
+    if (probes.length < count) return 0;
+    const lim = a.length - count * 7;
+    for (let i = 0x10000; i <= lim; i++) {
+      let ok = true;
+      for (const p of probes) {
+        const off = i + p.id * 7;
+        if (!validFuelRecord(a, off)) { ok = false; break; }
+        const mx = a[off + 1] | (a[off + 2] << 8);
+        const my = a[off + 3] | (a[off + 4] << 8);
+        const mz = a[off + 5] | (a[off + 6] << 8);
+        if (Math.abs(mx - p.x) > 3 || Math.abs(my - p.y) > 3
+            || Math.abs((mz + FUEL_Z_OFFSET) - p.z) > 4) { ok = false; break; }
+      }
+      if (ok) {
+        fuelAddr = i;
+        fuelSource = 'scan';
+        fuelVerified = true;
+        log('fuel array (tiny scan) at', '0x' + i.toString(16), 'count', count);
+        return i;
+      }
+    }
+    return 0;
+  }
   const probe = Math.min(count, 64);
   const lim = a.length - probe * 7;
   const spread = count > probe
@@ -905,7 +992,7 @@ function activeAlliance() {
   if (OPT.frameAlliance === 'red' || OPT.frameAlliance === 'blue') return OPT.frameAlliance;
   if (ourAllianceCache) return ourAllianceCache;
   const p = findPose(OPT.username);
-  if (p) {
+  if (p && Math.abs(p.x) > 0.05) {
     ourAllianceCache = p.x < 0 ? 'red' : 'blue';
     allianceByName.set(OPT.username, ourAllianceCache);
     allianceSourceByName.set(OPT.username, 'spawn');
@@ -1018,7 +1105,6 @@ function readRobots() {
 // UI flow
 // ---------------------------------------------------------------------------
 
-const BIN_MAGIC = Buffer.from('RSB1');
 function writeFrame(kind, frameSeq, payload) {
   const h = Buffer.alloc(16);
   BIN_MAGIC.copy(h, 0);
@@ -1067,7 +1153,7 @@ if (buildMeta && buildMeta.files) {
       if (actual !== expected) {
         log('build pin failed: hash mismatch for', file, 'expected', expected, 'got', actual);
         emit({ type: 'error', error: 'asset_hash_mismatch', file });
-        process.exit(3);
+        setTimeout(() => process.exit(3), 100);
       }
     } catch (e) {
       log('build pin failed: cannot hash', file, String(e));
@@ -1126,7 +1212,7 @@ if (!OPT.noBuildCheck) {
     });
 }
 setInterval(() => emit({ type: 'heartbeat', t: Date.now() / 1000, ws_open: wsOpen, ws_closed: wsClosed }), 1000);
-if (OPT.noBuildCheck) bootGame();
+if (OPT.noBuildCheck) setTimeout(() => bootGame(), 0);
 
 
 function key(type, keyName, code, keyCode) {
@@ -1189,6 +1275,16 @@ function applyInput(cmd) {
   setKey('space', !!cmd.shoot);
 }
 
+function releaseInputs() {
+  try {
+    for (const name of Object.keys(KEY)) setKey(name, false);
+    for (const b of pad.buttons) { b.pressed = false; b.value = 0; b.touched = false; }
+    pad.axes.fill(0);
+    pad.timestamp = performance.now();
+    refreshPad();
+  } catch (e) { log('releaseInputs error', String(e)); }
+}
+
 function tapBox(index, x, y, text) {
   try {
     Module.ccall('rb_tap_text_box', null, ['number', 'number', 'number'], [index, x, y]);
@@ -1200,6 +1296,20 @@ function tapBox(index, x, y, text) {
 }
 
 const flow = { booted: false, menu: false, name: false, rooms: false, joined: false, match: false };
+const uiTimers = new Set();
+function uiLater(fn, ms) {
+  const id = setTimeout(() => {
+    uiTimers.delete(id);
+    try { fn(); } catch (e) { log('ui timer error', String(e)); }
+  }, ms);
+  uiTimers.add(id);
+  return id;
+}
+function cancelUiTimers() {
+  for (const id of uiTimers) clearTimeout(id);
+  uiTimers.clear();
+  uiBusy = false;
+}
 function onTrack(name, params) {
   let p = params;
   if (typeof p === 'string') { try { p = JSON.parse(p); } catch { p = {}; } }
@@ -1219,20 +1329,25 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
-      // The room screen is visible. Do not mark the session joined here; the
-      // room_join track event carries host/seated/role and fires shortly after.
-      if (flow.match || matchWasActive) {
+      // Returning to the room screen ends the previous match (results/leave).
+      // Do not reset a genuinely live match; a stale page_view must not stop
+      // state emission mid-match.
+      const matchLive = flow.match && clockStarted && lastMatchTime != null && lastMatchTime > 0.05;
+      if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState();
         emitRoom();
-        if (seated) {
-          readyClicked = true;
-          startClicked = false;
-          setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+      }
+      if (flow.joined && seated && !flow.match && !readyClicked && !uiBusy) {
+        readyClicked = true;
+        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
+        if (host && OPT.start && !startClicked) {
+          startClicked = true;
+          uiLater(() => globalThis.__ctl.click(1150, 688), 1900);
         }
       }
       if (OPT.debug) log('room screen');
     } else if (path === '/multi/match') {
-      onMatchStart(false);
+      onMatchStart();
     }
   }
   if (name === 'name_prompt' && !flow.name) {
@@ -1264,20 +1379,25 @@ function onTrack(name, params) {
     seated = p.role === 'driver';
     role = p.role;
     roomCode = roomCode || OPT.code;
+    if (OPT.code && roomCode && roomCode.toUpperCase() !== OPT.code.toUpperCase()) {
+      failJoin('room_code_mismatch', `joined ${roomCode}, expected ${OPT.code}`);
+      return;
+    }
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emitRoom();
     const readyAndStart = () => {
       if (host && OPT.start && !startClicked) {
         startClicked = true;
-        setTimeout(() => globalThis.__ctl.click(646, 688), 900);
-        setTimeout(() => globalThis.__ctl.click(1150, 688), 1800);
+        uiLater(() => globalThis.__ctl.click(646, 688), 900);
+        uiLater(() => globalThis.__ctl.click(1150, 688), 1800);
       } else if (seated && (!readyClicked || previousRole !== 'driver')) {
         readyClicked = true;
-        setTimeout(() => globalThis.__ctl.click(646, 688), 1000);
+        uiLater(() => globalThis.__ctl.click(646, 688), 1000);
       }
     };
     if (host && OPT.fuel && !fuelApplied) {
       fuelApplied = true;
+      uiBusy = true;
       // Room settings > Rules > Fuel count. 720p coordinates.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
@@ -1288,20 +1408,20 @@ function onTrack(name, params) {
         else if (pct < 100) { clicks = Math.round((100 - pct) / 25); dir = -1; }
         else if (pct > 100) { clicks = Math.round((pct - 100) / 25); dir = 1; }
       }
-      setTimeout(() => globalThis.__ctl.click(752, 118), 500);   // room settings
-      setTimeout(() => globalThis.__ctl.click(794, 118), 1000);  // rules tab
+      uiLater(() => globalThis.__ctl.click(752, 118), 500);   // room settings
+      uiLater(() => globalThis.__ctl.click(794, 118), 1000);  // rules tab
       for (let i = 0; i < clicks; i++) {
-        setTimeout(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
+        uiLater(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
       }
-      setTimeout(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
-      setTimeout(readyAndStart, 1500 + clicks * 250 + 1000);
+      uiLater(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
+      uiLater(() => { uiBusy = false; readyAndStart(); }, 1500 + clicks * 250 + 1000);
       log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
     } else {
       readyAndStart();
     }
   }
   if (name === 'match_start') {
-    onMatchStart(true);
+    onMatchStart();
   }
 }
 
@@ -1340,7 +1460,7 @@ setTimeout(() => {
   if (!mem) {
     log('wasm memory was not captured; aborting');
     try { emit({ type: 'error', error: 'memory_unavailable' }); } catch {}
-    process.exit(2);
+    setTimeout(() => process.exit(2), 100);
   }
 }, 30000);
 
@@ -1376,7 +1496,9 @@ setInterval(() => {
   const fuelNow = Date.now();
   if (fuelAddr && fuelNow - lastFuelVerify > 2000) {
     lastFuelVerify = fuelNow;
-    if (!verifyFuelBase()) {
+    if (verifyFuelBase()) {
+      fuelVerified = true;
+    } else {
       log('fuel base moved; relocating');
       fuelAddr = 0;
       fuelVerified = false;
@@ -1427,14 +1549,6 @@ setInterval(() => {
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
   emit(state);
-  if (match.ended && !matchEndScheduled) {
-    matchEndScheduled = true;
-    matchEndTimer = setTimeout(() => {
-      resetMatchState();
-      matchEndScheduled = false;
-      matchEndTimer = null;
-    }, 500);
-  }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
 let trace = null;

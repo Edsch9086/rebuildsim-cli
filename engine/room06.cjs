@@ -22,11 +22,14 @@ function parseRoom06(buf) {
     // i+2/i+3 are a variable robot/team id (359 = 67 01 in the default robot).
     if (buf[i + 4] !== 2 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
     const robotId = buf.readUInt16LE(i + 2);
+    if (robotId === 0 || robotId >= 0x8000) continue;
     const len = buf[i + 7];
     if (len < 1 || len > 24) continue;
-    if (i + 8 + len > buf.length) continue;
+    // A real record has 8 bytes of per-player data after the name; requiring
+    // them rejects truncated/coincidental matches without assuming 359.
+    if (i + 8 + len + 8 > buf.length) continue;
     const name = buf.subarray(i + 8, i + 8 + len).toString('utf8');
-    if (!name || /[\x00-\x1f]/.test(name)) continue;
+    if (!name || /[\x00-\x1f]/.test(name) || name.includes('\ufffd')) continue;
     const teamFlag = buf[i + 1];
     if (teamFlag > 1) continue;
     const seat = seats.length;

@@ -80,7 +80,7 @@ stdout is JSON lines only:
  "frame":"alliance","alliance":"red","fuel_count":456,
  "hopper_fuel":8,"hopper_capacity":55,"intake_active":false,
  "hub":{"active":true,"red_active":true,"blue_active":true,
-        "red_inactive_first":null,"phase":"auto","source":"tie"},
+        "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.4,
        "z":0,"heading":-1.18,"vx":0,"vy":0,"vz":0,"yawRate":0},

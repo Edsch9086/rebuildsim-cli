@@ -3,7 +3,7 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const { parseRoom06 } = require('./room06.cjs');
 
-// Synthetic room state: 4 player records, seats 0-2 red, seat 3 blue.
+// Synthetic room state: five player records (0-2 red, 3 blue, 4 red).
 function rec(team, name, robotId = 359) {
   const b = Buffer.alloc(8 + 24);
   b[0] = 1;
@@ -25,6 +25,16 @@ assert.deepStrictEqual(
    [3, 'BlueCap', 'blue'], [4, 'RedFour', 'red']],
 );
 console.log('synthetic:', JSON.stringify(parsed.seats));
+
+// Captured single-player 0x06 from build b654373 (one red AnchorBot).
+const capturedHex = '0655414c375100738fc5ad020200000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100670102000009416e63686f72426f7400000000000000001662c2950080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff000000000000ff000000';
+const captured = parseRoom06(Buffer.from(capturedHex, 'hex'));
+assert.strictEqual(captured.seats.length, 1);
+assert.strictEqual(captured.seats[0].name, 'AnchorBot');
+assert.strictEqual(captured.seats[0].team_flag, 0);
+assert.strictEqual(captured.seats[0].alliance, 'red');
+assert.strictEqual(captured.seats[0].robot_id, 359);
+console.log('captured:', JSON.stringify(captured.seats));
 assert.strictEqual(parsed.seats[4].team_flag, 0);
 assert.strictEqual(parsed.seats[4].alliance, 'red', 'explicit red flag at index >= 3 must stay red');
 assert.strictEqual(parsed.seats[0].robot_id, 359);

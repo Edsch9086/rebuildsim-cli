@@ -320,7 +320,11 @@ pub enum EngineEvent {
         auto_blue: u16,
     },
     #[serde(rename = "error")]
-    Error { error: String },
+    Error {
+        error: String,
+        #[serde(default)]
+        detail: Option<String>,
+    },
     #[serde(rename = "ws")]
     Ws {
         state: String,
@@ -355,7 +359,7 @@ pub enum EngineEvent {
 
 pub struct Engine {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     rx: Receiver<std::io::Result<EngineEvent>>,
     _reader: thread::JoinHandle<()>,
 }
@@ -369,7 +373,13 @@ fn read_frame<R: std::io::Read>(
     while read < hdr.len() {
         let n = stdout.read(&mut hdr[read..])?;
         if n == 0 {
-            return Ok(None);
+            if read == 0 {
+                return Ok(None);
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("truncated engine frame header ({read}/16 bytes)"),
+            ));
         }
         read += n;
     }
@@ -562,7 +572,7 @@ impl Engine {
             .stderr(Stdio::inherit());
 
         let mut child = cmd.spawn()?;
-        let stdin = child.stdin.take().expect("piped stdin");
+        let stdin = Some(child.stdin.take().expect("piped stdin"));
         let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
         let (tx, rx) = mpsc::sync_channel(256);
         let binary = opts.binary;
@@ -576,9 +586,12 @@ impl Engine {
     }
 
     pub fn send(&mut self, value: &serde_json::Value) -> std::io::Result<()> {
-        serde_json::to_writer(&mut self.stdin, value)?;
-        self.stdin.write_all(b"\n")?;
-        self.stdin.flush()
+        let stdin = self.stdin.as_mut().ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::BrokenPipe, "engine stdin is closed")
+        })?;
+        serde_json::to_writer(&mut *stdin, value)?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()
     }
 
     pub fn send_input(&mut self, input: &Input) -> std::io::Result<()> {
@@ -695,7 +708,9 @@ impl Engine {
 
     /// Ask the engine to quit, wait up to `grace`, then kill it.
     pub fn shutdown(&mut self, grace: Duration) {
-        let _ = self.quit();
+        // The engine is spawned with --exit-on-stdin-close, so dropping the
+        // pipe is a non-blocking graceful shutdown even if its input pipe is full.
+        self.stdin.take();
         let deadline = Instant::now() + grace;
         loop {
             match self.child.try_wait() {
@@ -845,6 +860,7 @@ mod tests {
         assert_eq!(fuel[0].id, 0);
         assert!((fuel[1].x - 1.0).abs() < 1e-6);
         assert!((fuel[1].y + 1.0).abs() < 1e-6);
+        assert!((fuel[0].z - 0.045).abs() < 1e-6);
     }
 
     #[test]
@@ -858,6 +874,9 @@ mod tests {
         let mut huge = huge;
         huge[8..12].copy_from_slice(&(32u32 * 1024 * 1024).to_le_bytes());
         let mut reader = BufReader::new(Cursor::new(huge));
+        assert!(read_frame(&mut reader).is_err());
+
+        let mut reader = BufReader::new(Cursor::new(b"RSB1".to_vec()));
         assert!(read_frame(&mut reader).is_err());
     }
 
