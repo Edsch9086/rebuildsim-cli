@@ -8,3 +8,6 @@ cli/target/
 *.bin
 node_modules/
 target/
+
+# local algorithm planning workspace (notes, downloads, experiments)
+algo-planning/
