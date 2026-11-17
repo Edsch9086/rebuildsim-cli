@@ -7,9 +7,14 @@ const path = require('node:path');
 
 const ENGINE = process.env.RB_ENGINE || path.join(__dirname, 'headless.cjs');
 const ASSETS = process.env.RB_ASSET_DIR || path.join(__dirname, 'cache');
+if (process.env.RB_ALLOW_LIVE_TESTS !== '1') {
+  console.log('SKIP live test: set RB_ALLOW_LIVE_TESTS=1 to create/join a private room');
+  process.exit(0);
+}
 const child = spawn(process.execPath, [ENGINE, '--create', '--start',
   '--fuel', '25', '--gamepad', '--username', 'HopperTest', '--emit-hz', '10'],
   { env: { ...process.env, RB_ASSET_DIR: ASSETS }, stdio: ['pipe', 'pipe', 'pipe'] });
+
 const OUT = process.env.RB_TEST_OUT || path.join(os.tmpdir(), 'rebuildsim-tests');
 fs.mkdirSync(OUT, { recursive: true });
 child.stderr.pipe(fs.createWriteStream(path.join(OUT, 'hopper_test.log')));
@@ -41,13 +46,14 @@ readline.createInterface({ input: child.stdout }).on('line', (line) => {
   }
   child.stdin.write('{"type":"input"}\n');
   console.log('hopper sequence', JSON.stringify(seen));
-  console.log('VERDICT', JSON.stringify({
+  const verdict = {
     initial8: start === 8,
     intakeOn: intakeOn === true,
     intakeOff: intakeOff === false,
     droppedTo0: seen[seen.length - 1] === 0,
-  }));
+  };
+  console.log('VERDICT', JSON.stringify(verdict));
   try { child.stdin.write('{"type":"quit"}\n'); } catch {}
   child.kill();
-  process.exit(0);
+  process.exit(Object.values(verdict).every(Boolean) ? 0 : 1);
 })();

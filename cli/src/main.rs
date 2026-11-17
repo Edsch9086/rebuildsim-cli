@@ -40,6 +40,7 @@ struct Args {
     exit_on_ws_close: bool,
     restart_on_exit: bool,
     max_restarts: u32,
+    join_timeout: u64,
 }
 
 impl Default for Args {
@@ -68,6 +69,7 @@ impl Default for Args {
             exit_on_ws_close: true,
             restart_on_exit: false,
             max_restarts: 3,
+            join_timeout: 60,
         }
     }
 }
@@ -104,6 +106,7 @@ OPTIONS:
   --allow-ws-close    keep running if the room WebSocket closes (default: exit 6)
   --restart-on-exit   rejoin the lobby after a disconnect (join mode only)
   --max-restarts <N>  restart limit with --restart-on-exit (default: 3)
+  --join-timeout <S>  fail (exit 5) if no room join within S seconds (default: 60)
   -h, --help          show this help
 
 The engine downloads no assets by itself; run `node engine/prepare.mjs` first.
@@ -153,6 +156,13 @@ fn parse_args() -> Result<Args, String> {
                     .ok_or("--max-restarts needs a value")?
                     .parse()
                     .map_err(|_| "invalid --max-restarts")?
+            }
+            "--join-timeout" => {
+                a.join_timeout = it
+                    .next()
+                    .ok_or("--join-timeout needs a value")?
+                    .parse()
+                    .map_err(|_| "invalid --join-timeout")?
             }
             "--emit-hz" => {
                 a.emit_hz = it
@@ -302,15 +312,25 @@ fn main() {
     let mut states = 0u64;
     let state_timeout = Duration::from_secs(args.state_timeout.max(1));
     let mut in_match = false;
+    let mut joined = false;
+    let mut join_started = Instant::now();
     let mut last_state = Instant::now();
 
     loop {
+        if !joined && join_started.elapsed() > Duration::from_secs(args.join_timeout.max(1)) {
+            eprintln!(
+                "join timeout: no room join after {:.1}s; engine is stalled or blocked",
+                join_started.elapsed().as_secs_f64()
+            );
+            engine.shutdown(Duration::from_secs(1));
+            std::process::exit(5);
+        }
         if in_match && last_state.elapsed() > state_timeout {
             eprintln!(
                 "state timeout: no state for {:.1}s; engine is stalled or disconnected",
                 last_state.elapsed().as_secs_f64()
             );
-            engine.kill();
+            engine.shutdown(Duration::from_secs(1));
             std::process::exit(5);
         }
         match engine.next_event_timeout(Duration::from_secs(1)) {
@@ -319,6 +339,7 @@ fn main() {
                     "engine ready (build {})",
                     build.unwrap_or_else(|| "?".into())
                 );
+                join_started = Instant::now();
             }
             Ok(Some(EngineEvent::Room {
                 code,
@@ -332,16 +353,27 @@ fn main() {
                     role.unwrap_or_else(|| "?".into())
                 );
                 print_seats(&seats);
-                in_match = false;
+                joined = true;
+                if !seated {
+                    eprintln!("joined as a spectator; this bot cannot drive");
+                    engine.shutdown(Duration::from_secs(1));
+                    std::process::exit(7);
+                }
             }
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
                 print_seats(&seats);
             }
-            Ok(Some(EngineEvent::Match { phase, time, seats })) => {
-                println!("match started phase={phase} time={time:?}");
+            Ok(Some(EngineEvent::Match {
+                phase,
+                substage,
+                time,
+                seats,
+            })) => {
+                println!("match started phase={phase} substage={substage} time={time:?}");
                 print_seats(&seats);
                 in_match = true;
+                restarts = 0;
                 last_state = Instant::now();
             }
             Ok(Some(EngineEvent::State(state))) => {
@@ -355,8 +387,10 @@ fn main() {
                 }
                 if let Some(d) = demo.as_mut() {
                     d.observe(&state);
-                    if d.tick(&mut engine, &state).is_err() {
-                        break;
+                    if let Err(e) = d.tick(&mut engine, &state) {
+                        eprintln!("demo input error: {e}");
+                        engine.shutdown(Duration::from_secs(1));
+                        std::process::exit(1);
                     }
                 }
             }
@@ -405,12 +439,17 @@ fn main() {
                     eprintln!(
                         "room WebSocket closed; exiting (use --allow-ws-close to keep running)"
                     );
-                    engine.kill();
+                    engine.shutdown(Duration::from_secs(1));
                     if args.restart_on_exit && args.code.is_some() && !in_match {
                         if let Some(new_engine) =
                             restart_engine(&opts, &mut restarts, args.max_restarts)
                         {
                             engine = new_engine;
+                            if demo.is_some() {
+                                demo = Some(Demo::default());
+                            }
+                            joined = false;
+                            join_started = Instant::now();
                             last_state = Instant::now();
                             continue;
                         }
@@ -423,36 +462,44 @@ fn main() {
             | Ok(Some(EngineEvent::Pong { .. }))
             | Ok(Some(EngineEvent::Other)) => {}
             Ok(None) => {
-                let code = engine.wait_code();
+                let code = engine.wait_code_timeout(Duration::from_secs(2));
                 eprintln!("engine exited code={code:?}");
                 let retryable = args.restart_on_exit
                     && args.code.is_some()
                     && !in_match
-                    && !matches!(code, Some(0) | Some(3) | Some(4));
+                    && matches!(code, Some(1));
                 if retryable {
                     if let Some(new_engine) =
                         restart_engine(&opts, &mut restarts, args.max_restarts)
                     {
                         engine = new_engine;
+                        if demo.is_some() {
+                            demo = Some(Demo::default());
+                        }
+                        joined = false;
+                        join_started = Instant::now();
                         last_state = Instant::now();
                         continue;
                     }
                 }
-                if let Some(c) = code {
-                    if c != 0 {
-                        std::process::exit(c);
+                match code {
+                    Some(0) => break,
+                    Some(c) => std::process::exit(c),
+                    None => {
+                        eprintln!("engine exited without a status code");
+                        std::process::exit(5);
                     }
                 }
-                break;
             }
             Err(e) => {
                 eprintln!("engine read error: {e}");
-                break;
+                engine.shutdown(Duration::from_secs(1));
+                std::process::exit(5);
             }
         }
     }
 
-    engine.kill();
+    engine.shutdown(Duration::from_secs(1));
 }
 
 #[derive(Default)]

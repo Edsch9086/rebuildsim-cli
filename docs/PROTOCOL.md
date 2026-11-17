@@ -61,8 +61,9 @@ and have this signature:
 `<team>` is `0` for red and `1` for blue. A fresh 4-player room was captured as
 seats 0–2 red (`team=0`) and seat 3 blue (`team=1`), matching the blue client's
 HUD. The engine parses this with `engine/room06.cjs` and exposes `seats` plus
-per-robot `alliance_source: "room"`. The seat-order fallback (first 3 red, next
-3 blue) is used only if the team byte is absent.
+per-robot `alliance_source: "room"`. The team byte is authoritative; there is no
+seat-order fallback. `seat` is the record/seat-order index, not a separate wire
+seat id.
 
 The `0x07` seats the joining player; the last `00 80` is part of the selection
 (spawn/robot), not yet fully decoded.
@@ -175,7 +176,10 @@ The server cycles through all fuel in 48-record chunks (`id` starts at 0, 48,
 
   Example: during auto the HUD showed RED 1 / BLUE 2 and the packet had
   `14=1, 16=2`; after teleop scoring it showed RED 2 / BLUE 3 with
-  `14=2, 16=3`, while `+18/+28` stayed at the auto values.
+  `14=2, 16=3`, while `+18/+28` stayed at the auto values. The `+18/+28` fields
+  are auto **scores**; if tower points were scored in AUTO they may not equal
+  auto fuel. The hub scheduler uses these fields, so pass `--hub-order` when
+  the correct SHIFT-1 order is known.
 - Driver input works during auto as soon as the clock starts. The 3-second
   countdown is before the match clock; the field reset at 143→140 is a 3-second
   reset window.
@@ -208,12 +212,17 @@ count × 7 bytes: present u8, x u16, y u16, z u16
   x/y/z = (value - 0x8000) / 4096 m; bottom of the fuel, add 0.045 m for z
 ```
 
+The x/y values in this frame are in the engine's output frame: alliance-normalized
+by default, or raw global with `--field-frame`. They are not always the raw wasm
+values. The frame omits packet `vx/vy/vz/count/flags`; use JSON mode if those are
+needed.
+
 The engine emits the fuel frame immediately before the matching JSON `state`
 frame; that state has `"fuel_bin": true` and an empty `fuel` array. The Rust
 `Engine` reader attaches the packed fuel to the state. JSON mode (`--binary`
 omitted) remains fully compatible.
 
-### 1.7 Other observed packets
+### 1.8 Other observed packets
 
 ```
 S→C 48 <u32 tick> <4 × u32 status> <8-byte hash>   // 30 bytes
@@ -247,8 +256,9 @@ u16 z             // bottom; add ~0.045 m for centre
 - Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
   for that 4-byte pair, set `base = hit - 1 - id*7`, and verify several packet
   records against the base. This works for any count and heap layout.
-- Fallback for `count <= 2048`: scan for `count` consecutive records with
-  `present ∈ {0,1}` and `z` in `[32700, 33200]`. Stop after the first 8 MB.
+- Fallback: scan for 64 consecutive valid records (`present ∈ {0,1}`, `z` in
+  `[32700, 33200]`), then spot-check a spread of later records. This works for
+  counts above 2,048. Stop after the first 8 MB.
 - The packet id equals the array index (id 0 → record 0). The engine emits
   `fuel_count` and all `count` records, merging packet velocities/flags.
 
@@ -295,7 +305,10 @@ There are many copies (room UI, telemetry, replay, network). Two copies matter:
   updates at **~15 Hz**.
 - **Predicted/render copy** at `0x512a49` (pose `0x512a64`), same layout and
   `1.0` signature, updates at **~48 Hz**. The engine prefers this copy
-  (`pose_source: "predicted"`) and falls back to the acked copy.
+  (`pose_source: "predicted"`) and falls back to the acked copy. The predicted
+  copy was observed in `0x500000..0x530000`; this is a fixed-range heuristic,
+  and cache hits verify the name field. If the render region moves, the engine
+  reports `acked` rather than guessing.
 
 The earlier "lag" was input sent before the match clock started. The engine
 exposes `me`/`is_me` by username. Alliance comes from the `0x06` seat team flag
@@ -366,7 +379,7 @@ rb_wheel(dy, mode)
 
 `rb_type_text` is the one used by the in-game name/room-code boxes.
 
-## 4. Engine API proposal
+## 4. Historical engine API proposal (superseded by docs/API.md)
 
 JSON lines on stdin/stdout (debug logs go to stderr). The Rust CLI spawns one
 engine per bot.
@@ -392,9 +405,9 @@ CLI → engine:
 {"type":"leave"}
 ```
 
-For Phase 1, map `x/y/rotate` to keyboard keys (W/S/A/D + J/L) and
-`intake/shoot` to LShift/Space. Phase 2 should use a virtual gamepad for true
-analog axes.
+This section is retained as history. The implemented API is in `docs/API.md`:
+alliance-normalized coordinates, virtual gamepad controls, binary fuel frames,
+hub/hopper state, and the Rust `Engine` wrapper.
 
 ## 5. Versioning
 
@@ -405,7 +418,9 @@ var BUILD="4a8a0e8", Module={locateFile:...}
 ```
 
 and the wasm handshake contains `DUBR` + the same hash. `engine/prepare.mjs`
-should parse the page, download the matching `index.js`/`index.wasm`, and the
-engine should refuse to run if the live server's protocol/build differs. The
-server sends `0x21 00 01 00 00` (protocol version 1) and can reply with a build
-mismatch message.
+parses the page, downloads the matching `index.js`/`index.wasm`, records their
+SHA-256 hashes, and writes `build.json` last. The engine verifies the hashes and
+compares the cached `BUILD` with the live page; any mismatch or fetch failure
+exits 3. The observed `0x21 00 01 00 00` carries only protocol version 1; the
+hello carries the build hash, but no separate build-mismatch packet has been
+observed.

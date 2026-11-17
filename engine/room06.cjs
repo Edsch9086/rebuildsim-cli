@@ -9,8 +9,8 @@
 // seats are red (captain, red 1, red 2) and the next three are blue (captain,
 // blue 1, blue 2). Spectator records use a different signature and are skipped.
 //
-// The seat order fallback (first 3 red, next 3 blue) is retained for builds
-// that don't populate the team byte.
+// The team byte is authoritative: 0 = red, 1 = blue. There is no seat-order
+// fallback; a record with an explicit 0 flag is red even at index >= 3.
 
 function parseRoom06(buf) {
   if (!Buffer.isBuffer(buf)) buf = Buffer.from(buf);
@@ -21,8 +21,9 @@ function parseRoom06(buf) {
     if (buf[i + 3] !== 1 || buf[i + 4] !== 2 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
     const len = buf[i + 7];
     if (len < 1 || len > 24) continue;
+    if (i + 8 + len > buf.length) continue;
     const name = buf.subarray(i + 8, i + 8 + len).toString('utf8');
-    if (!/^[\x20-\x7e]+$/.test(name)) continue;
+    if (!name || /[\x00-\x1f]/.test(name)) continue;
     const teamFlag = buf[i + 1];
     if (teamFlag > 1) continue;
     const seat = seats.length;
@@ -30,7 +31,7 @@ function parseRoom06(buf) {
       seat,
       name,
       team_flag: teamFlag,
-      alliance: teamFlag === 1 ? 'blue' : (seats.length < 3 ? 'red' : 'blue'),
+      alliance: teamFlag === 1 ? 'blue' : 'red',
     });
     i += 8 + len - 1;
   }

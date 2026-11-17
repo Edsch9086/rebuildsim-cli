@@ -40,20 +40,22 @@ Flags:
 ```
 --code <CODE>       join a room
 --username <NAME>   display name
---create            create a room
---start             if host, ready and start the match
+--create            test-only: create a room
+--start             test-only: if host, ready and start the match
 --spawn <S>         reserved; ignored (infer spawn from first pose)
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)
 --fuel <PCT>        host only: set fuel count rule (25/50/75/100/125/150/...)
 --binary            framed stdout: JSON + packed fuel records
 --field-frame       raw global coordinates (default: alliance-normalized)
---frame-alliance R|B  diagnostic override for the output frame (testing)
+--frame-alliance red|blue  diagnostic override for the output frame (r/b accepted)
 --hub-order red|blue  force the SHIFT-1 inactive hub (tied AUTO/testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
 --no-build-check    skip the live BUILD fetch (offline debugging)
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
+--wslog             capture WebSocket frames for dumpws (also on with --debug)
+--exit-on-stdin-close  exit when stdin closes (default: keep running)
 ```
 
 Set `RB_ASSET_DIR` to override `engine/cache/` (useful when testing another
@@ -70,7 +72,7 @@ stdout is JSON lines only:
 {"type":"seats","code":"ABCDE","seats":[
   {"seat":0,"name":"TestBot","team_flag":0,"alliance":"red"}]}
 {"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
-{"type":"match","phase":"auto","substage":"auto","time":163.0,"seats":[...]}
+{"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
 {"type":"score","seq":0,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
 {"type":"state","seq":0,"t":...,"phase":"auto","substage":"auto","time":158.0,
  "time_remaining":158.0,"substage_remaining":15.0,
@@ -120,7 +122,9 @@ that carried `0x06`. The Rust CLI uses these for timeout/exit handling.
 
 `--binary` frames stdout with a 16-byte `RSB1` header. Kind 2 carries packed
 fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
-`fuel_bin: true` and an empty `fuel` array. See `docs/PROTOCOL.md` §1.7.
+`fuel_bin: true` and an empty `fuel` array. Packed records carry only
+`present/x/y/z`; packet `vx/vy/vz/count/flags` are JSON-mode only. See
+`docs/PROTOCOL.md` §1.7.
 
 ## Tests
 
@@ -129,11 +133,12 @@ node room06_test.cjs
 node frame_test.cjs
 node hopper_test.cjs
 node hub_test.cjs
-RB_ASSET_DIR=engine/cache node binary_test.cjs
+node binary_test.cjs
 ```
 
-`room06_test.cjs` parses a synthetic 4-seat packet and the captured live packet
-(seats 0–2 red, seat 3 blue). `frame_test.cjs` forces the blue output frame and
+`room06_test.cjs` parses a synthetic 5-seat packet (seats 0–2 red, seat 3 blue,
+seat 4 red) and can optionally check a captured packet via
+`RB_ROOM06_FIXTURE`. `frame_test.cjs` forces the blue output frame and
 checks that poses/fuel/heading rotate 180 degrees and that forward input reverses
 in normalized coordinates. `hopper_test.cjs` starts a 25% match and checks the
 hopper goes 8 -> 0 while shooting. `hub_test.cjs` checks the AUTO-winner and
@@ -143,21 +148,23 @@ and `fuel_bin` state.
 
 `multibot_browser.mjs` is the optional 4-client identity/control test (engine
 host + three browser clients in separate contexts). It needs `playwright-core`
-and a Chromium binary; see the header comment.
+and a Chromium binary; see the header comment. `package.json` declares the Node
+engine and the test scripts, but `playwright-core` is intentionally not a
+dependency because the headless engine itself does not need it.
 
 ## Known limitations
 
 - Driver input works during **auto** as soon as the match clock starts.
   `phase` is `countdown`/`auto`/`teleop`/`end`; `substage` adds
-  `field_reset`/`transition`/`shift1`..`shift4`/`endgame`.
+  `prematch`/`field_reset`/`transition`/`shift1`..`shift4`/`endgame`.
 - Robot pose prefers the render-region **predicted copy** (~48 Hz) and falls
   back to the ~15 Hz player copy; `pose_source` says which. `me`/`is_me`
   identify this CLI's robot. Alliance comes from the `0x06` seat team flag
   (`alliance_source: "room"`); the spawn-x heuristic is only a fallback.
 - Positions/headings/velocities are **alliance-normalized by default**: blue
-  gets the same 180-degree-rotated frame as red, so identical bot logic works
-  on both sides and `alliance` is diagnostic only. `--field-frame` returns raw
-  global coordinates.
+  gets the same 180-degree-rotated frame as red, so identical bot logic is the
+  intended contract; `alliance` is diagnostic only. `--field-frame` returns raw
+  global coordinates. A live blue-seat input test is still pending.
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
 - `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b). It starts
@@ -175,7 +182,8 @@ and a Chromium binary; see the header comment.
   testing only.
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
-- One engine = one wasm instance + one WebSocket. For multiple bots, spawn one
+- One engine = one wasm instance + two WebSocket connections (room list + room).
+  For multiple bots, spawn one
   process per bot. The **public server has a per-IP connection limit**; a second
   headless engine from the same IP was closed in testing. Use the local server
   or separate IPs for six-bot runs.
@@ -185,8 +193,9 @@ and a Chromium binary; see the header comment.
   `--restart-on-exit` can respawn/rejoin the same room code (up to
   `--max-restarts`, default 3); it is disabled once a match starts.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
-  fetches the latest build and writes `build.json`; the engine compares it with
-  the live page `BUILD` and exits 3 on drift. `--expect-build` checks before
-  connecting. The `0x21` protocol version must be 1 (exit 4 otherwise). The
-  fuel-array locator and player-state signature still need re-validation after
-  a game update.
+  downloads both assets to temp files, records their SHA-256 hashes, and writes
+  `build.json` last. The engine verifies the hashes, compares the cached
+  `BUILD` with the live page, and exits 3 on any mismatch or fetch failure.
+  `--no-build-check` is the explicit offline escape hatch. The `0x21` protocol
+  version must be 1 (exit 4 otherwise). The fuel-array locator and player-state
+  signature still need re-validation after a game update.

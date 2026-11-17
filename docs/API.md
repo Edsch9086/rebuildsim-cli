@@ -20,10 +20,17 @@ let mut engine = Engine::spawn(&opts)?;
 
 while let Some(state) = engine.next_state()? {
     let me = state.me.as_ref().expect("our robot");
-    // state.scores, state.substage, state.time ...
+    // state.red_score, state.blue_score, state.hub, state.substage, state.time ...
     engine.send_input(&Input { y: 1.0, ..Default::default() })?;
 }
 ```
+
+`Engine` also provides `next_event_timeout`, `next_state_timeout`, and
+`next_state_or_event_timeout` (returns `NextState::State` or
+`NextState::Event`). Use the event-aware variants if you need to observe
+`Error`, `Ws`, or `Room` events. `next_state()` is the simple blocking helper
+and intentionally drops non-state events. The reader runs on a background
+thread, so a stalled engine cannot block the caller indefinitely.
 
 ## Units and conventions
 
@@ -55,7 +62,7 @@ while let Some(state) = engine.next_state()? {
 | `emit_hz` | states per second |
 | `protocol` | server protocol version integer (`1` currently) |
 | `team_flag` | seat team enum: `0` red, `1` blue |
-| `seat` | zero-based room seat index |
+| `seat` | zero-based record/seat-order index (normal rooms are seat order) |
 
 Notes:
 
@@ -82,8 +89,9 @@ pub struct GameState {
     pub seq: u64,
     pub t: f64,               // unix seconds
     pub phase: String,        // "countdown" | "auto" | "teleop" | "end"
-    pub substage: String,     // "auto" | "field_reset" | "transition" |
-                              // "shift1".."shift4" | "endgame" | "end"
+    pub substage: String,     // "prematch" | "auto" | "field_reset" |
+                              // "transition" | "shift1".."shift4" |
+                              // "endgame" | "end"
     pub time: Option<f64>,    // match clock from 0x41 (163.0 -> 0.0)
     pub time_remaining: Option<f64>,      // same value, explicit name
     pub substage_remaining: Option<f64>,  // seconds until the next boundary
@@ -92,13 +100,20 @@ pub struct GameState {
     pub auto_red_score: u16,  // frozen at the end of auto
     pub auto_blue_score: u16,
     pub protocol: Option<u8>,
-    pub frame: String,        // "alliance" (default) | "field"
-    pub alliance: String,     // diagnostic only; bots should not need it
+    pub frame: String,        // "alliance" (default) | "field" | "unknown"
+    pub alliance: String,     // diagnostic only; "unknown" until resolved
+    pub hub: HubStatus,
+    pub hopper_fuel: Option<u16>,
+    pub hopper_capacity: Option<u16>,
+    pub intake_active: Option<bool>,
     pub me: Option<Robot>,    // the robot owned by this CLI instance
     pub robots: Vec<Robot>,
     pub fuel: Vec<Fuel>,
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
     pub fuel_bin: bool,          // fuel arrived on the binary channel
+    pub fuel_ok: bool,           // false if fuel_count is known but unreadable
+    pub ws_open: u32,
+    pub ws_closed: u32,
 }
 ```
 
@@ -130,6 +145,10 @@ scores freeze when auto ends.
 - A tied AUTO is decided by the FMS; the API reports `hub.active = null`,
   `hub.red_active = null`, `hub.blue_active = null`, `source = "tie"` during
   shifts. Outside shifts it still reports both active/inactive normally.
+- The engine currently uses the `0x41` auto **score** fields (`+18/+28`) to pick
+  the AUTO winner. If a robot scored tower points in AUTO, those fields may not
+  be fuel-only; use `--hub-order red|blue` when the correct SHIFT-1 order is
+  known.
 
 ```rust
 pub struct HubStatus {
@@ -139,7 +158,7 @@ pub struct HubStatus {
     pub red_inactive_first: Option<bool>,
     pub phase: String,               // "auto" | "field_reset" | "transition" |
                                      // "shift1".."shift4" | "endgame" | "end" | "unknown"
-    pub source: String,              // "auto_score" | "tie" | "unknown"
+    pub source: String,              // "auto_score" | "tie" | "forced" | "unknown"
 }
 ```
 
@@ -162,7 +181,8 @@ pub struct Robot {
     pub heading: f32,         // radians, in state.frame
     pub vx: f32, pub vy: f32, pub vz: f32, // m/s, in state.frame
     pub yaw_rate: f32,
-    pub pose_source: String,  // "predicted" (render copy, ~48 Hz) | "acked"
+    pub pose_source: String,  // "predicted" (~48 Hz) | "acked" | "stale"
+    pub stale: bool,          // true when the last known pose was reused
     pub hopper_fuel: Option<u16>, // that robot's hopper fuel, if readable
     pub intake_active: Option<bool>, // that robot's intake flag
 }
@@ -182,7 +202,8 @@ this robot; the game handles aiming internally. Hub lights are visual; use
 `hub.active` for the logical state.
 
 `Fuel`: `id, x, y, z, present`, plus optional `vx, vy, vz, count, flags` merged
-from the server packet. The array length is `fuel_count`, not a fixed 456.
+from the server packet in JSON mode. In binary mode those optional fields are
+`None`. The array length is `fuel_count`, not a fixed 456.
 
 ### `Input`
 
@@ -206,7 +227,8 @@ guessing by team.
 
 With the default `frame == "alliance"`, the engine has already rotated
 positions/headings/velocities into your driver frame. Just plan in the reported
-coordinates:
+coordinates (a live blue-seat input test is still pending; the output-frame
+rotation is verified):
 
 ```rust
 let dx = target_x - me.x;
@@ -216,9 +238,9 @@ engine.send_input(&Input { x: strafe, y: forward, ..Default::default() })?;
 
 `Robot::field_to_driver()` and `alliance_heading()` exist for
 `--field-frame`/raw-global consumers only; do not call them in alliance frame.
-The 4-player seat test showed seat 4 as blue (`team=1`), so a fourth bot in a
-fresh room is blue without moving. In a 3v3, the first three joiners are red and
-the next three blue.
+The 4-player seat test showed **seat index 3 / the fourth seat** as blue
+(`team=1`), so a fourth bot in a fresh room is blue without moving. In a 3v3,
+the first three joiners are red and the next three blue.
 
 ## Engine JSON lines (stdio, default)
 
@@ -231,12 +253,15 @@ Engine → CLI:
 {"type":"seats","code":"ABCDE","seats":[
   {"seat":0,"name":"MyBot","team_flag":0,"alliance":"red"}]}
 {"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver","seats":[...]}
-{"type":"match","phase":"auto","substage":"auto","time":163.0,"seats":[...]}
+{"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
 {"type":"score","seq":42,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
 {"type":"state","seq":42,"t":1794772715.59,"phase":"auto","substage":"auto",
  "time":158.8,"time_remaining":158.8,"substage_remaining":15.8,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
- "scores":{"red":7,"blue":4},"protocol":1,"fuel_count":456,
+ "scores":{"red":7,"blue":4},"protocol":1,"frame":"alliance","alliance":"red",
+ "fuel_count":456,"fuel_ok":true,"hopper_fuel":8,"hopper_capacity":55,
+ "intake_active":false,"hub":{"active":true,"red_active":true,"blue_active":true,
+ "red_inactive_first":null,"phase":"auto","source":"tie"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.40,
        "z":0.0,"heading":-1.18,"vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0},
@@ -267,8 +292,10 @@ The Rust `Engine` passes `--binary` by default. Engine stdout then uses 16-byte
 `RSB1` frames: kind 1 is a JSON event, kind 2 is packed fuel (7 bytes/record).
 The fuel frame carries the same sequence number as the following state; that
 state has `"fuel_bin": true` and `"fuel": []`, and the Rust reader reattaches
-the decoded array. See `docs/PROTOCOL.md` §1.7 for the byte layout. Use
-`EngineOptions.binary = false` to get plain JSON lines.
+the decoded array. Packed records carry only `present/x/y/z`; packet
+`vx/vy/vz/count/flags` are available only in JSON mode. See
+`docs/PROTOCOL.md` §1.7 for the byte layout. Use `EngineOptions.binary = false`
+to get plain JSON lines.
 
 ## Timeouts and disconnect handling
 
@@ -277,6 +304,8 @@ The CLI adds two watchdogs on top of the engine:
 - `--state-timeout <S>` (default 5): if a match is running and no state arrives
   for S seconds, print an error and exit `5`. This catches a stalled Node
   process, a broken stdout pipe, or a silently frozen engine.
+- `--join-timeout <S>` (default 60): if no room join arrives after the engine is
+  ready, exit `5`. This catches a hung title/menu/room UI.
 - Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
   the socket that delivered `0x06` closes. The CLI exits `6` in that case
   unless `--allow-ws-close` is passed.
@@ -299,7 +328,7 @@ At startup the engine fetches the page and compares the live `BUILD`:
 
 - mismatch → emits `{"type":"error","error":"build_drift",...}` and exits `3`;
 - `--expect-build <hash>` checks the cached assets before connecting and exits
-  `3` on mismatch;
+  `3` on mismatch; asset SHA-256 hashes from `build.json` are verified too;
 - `--no-build-check` skips the live fetch (offline/local debugging).
 
 The `0x21` protocol hello must report version `1`; a mismatch is a hard error

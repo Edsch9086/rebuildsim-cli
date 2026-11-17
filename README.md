@@ -20,7 +20,8 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
   send robot poses. Robot poses come from the client-side deterministic
   simulation.
 - The wasm runs **headless in Node** with a no-op WebGL2 context at ~59 fps. No
-  Chromium, no Playwright, no GPU. Measured ~19% of one core and ~180 MB RSS.
+  Chromium, no Playwright, no GPU. Measured ~19% of one core and ~180 MB RSS for
+  a single bot at default fuel; 3v3/4,300-fuel runs are not yet measured.
 - We can drive the real client's UI in the headless engine (create/join by code,
   ready, start) and read the live fuel array + player pose structs out of wasm memory.
   The player-state pose updates live; driver input works during auto as soon as
@@ -44,7 +45,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
 | Robot identity | ✅ `me` + `is_me` by username |
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
-| Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); seat 4 blue confirmed |
+| Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); fourth seat blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
 | Hopper fuel | ✅ count (8 -> 0), capacity 55, intake flag |
 | Hub active/inactive | ✅ computed from clock + AUTO winner; tie reports unknown |
@@ -71,8 +72,8 @@ The engine prints JSON lines on stdout and accepts JSON commands on stdin.
 Normal bots only join (`--code`); a human host starts the match. `--create` /
 `--start` remain for local testing. `--binary` switches to framed stdout with
 packed fuel records (the Rust CLI uses this by default). `--expect-build <hash>`
-pins the downloaded build; startup fails with exit 3 if the live server build
-differs.
+checks the cached build hash; startup also verifies asset hashes and fails with
+exit 3 if the live server build differs.
 
 Rust CLI (from the repo root):
 

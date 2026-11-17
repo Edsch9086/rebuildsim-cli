@@ -3,9 +3,11 @@
 // Both hubs are active during AUTO, the TRANSITION SHIFT, and END GAME. There is
 // a 3-second field-reset delay between AUTO and TELEOP where both are inactive.
 // During the four ALLIANCE SHIFTS one hub is active and the other is inactive.
-// The alliance that scored more fuel in AUTO has its hub inactive in SHIFT 1;
+// The alliance that scored more AUTO fuel has its hub inactive in SHIFT 1;
 // the status then alternates each shift. A tied AUTO is resolved by the FMS
 // (random), so this module reports the shift status as unknown on a tie.
+// The caller currently supplies the 0x41 auto score fields; if those include
+// non-fuel AUTO points, pass an explicit forcedOrder instead.
 
 function computeHub(time, autoRed, autoBlue, alliance, forcedOrder) {
   if (forcedOrder === 'r' || forcedOrder === 'R') forcedOrder = 'red';

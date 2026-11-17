@@ -1,4 +1,5 @@
 // Headless REBUILD engine harness: real wasm, stub WebGL, DOM events, memory capture.
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
 const nativeFetch = globalThis.fetch;
@@ -262,11 +263,25 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
   process.exit(2);
 }
 log('engine options', JSON.stringify(OPT));
+if (!OPT.username || Buffer.byteLength(OPT.username, 'utf8') > 24 || !/^[\x20-\x7e]+$/.test(OPT.username)) {
+  console.error('invalid --username: use 1-24 printable ASCII characters');
+  try { process.stdout.write(JSON.stringify({ type: 'error', error: 'invalid_username' }) + '\n'); } catch {}
+  process.exit(2);
+}
 if (OPT.spawn) log('note: --spawn is not implemented yet; using the default seat');
 if (OPT.fuel) log('fuel rule request', OPT.fuel);
 
 if (OPT.server) {
-  const [host, port] = OPT.server.split(':');
+  let host = OPT.server;
+  let port = '';
+  const bracketed = OPT.server.match(/^\[([^\]]+)\]:(\d+)$/);
+  if (bracketed) {
+    host = bracketed[1];
+    port = bracketed[2];
+  } else {
+    const i = OPT.server.lastIndexOf(':');
+    if (i > 0) { host = OPT.server.slice(0, i); port = OPT.server.slice(i + 1); }
+  }
   globalThis.location.host = OPT.server;
   globalThis.location.hostname = host;
   globalThis.location.port = port || '';
@@ -277,7 +292,9 @@ if (OPT.server) {
 }
 
 const wslog = [];
+const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
+let role = null, lastRoomKey = '', matchEndScheduled = false;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -290,6 +307,7 @@ let roomSeats = [];
 let scores = { red: 0, blue: 0 };
 let autoScores = { red: 0, blue: 0 };
 let protocolVersion = null;
+let lastCountdown = null;
 let ourAllianceCache = null;
 
 function addPrintableNames(buf) {
@@ -315,12 +333,48 @@ function addPrintableNames(buf) {
 }
 
 let seatsKey = '';
+let identityFatal = false;
+function failIdentity(reason, detail) {
+  if (identityFatal) return;
+  identityFatal = true;
+  log('identity failure:', reason, detail || '');
+  emit({ type: 'error', error: reason, detail: detail || '' });
+  setTimeout(() => process.exit(8), 100);
+}
+function emitRoom() {
+  const key = `${roomCode}|${host}|${seated}|${role}|${roomSeats.map(s => `${s.seat}:${s.name}:${s.alliance}`).join(',')}`;
+  if (key === lastRoomKey) return;
+  lastRoomKey = key;
+  emit({ type: 'room', code: roomCode, host, seated, role, seats: roomSeats });
+}
+
+function resetMatchState() {
+  matchStarted = false;
+  flow.match = false;
+  poseCache.clear();
+  lastPose.clear();
+  fuelAddr = 0;
+  lastFuelScan = 0;
+  fuelPacket.clear();
+  fuelPacketCount = 0;
+  lastMatchTime = null;
+  last41 = null;
+  scores = { red: 0, blue: 0 };
+  autoScores = { red: 0, blue: 0 };
+  lastScoreKey = '';
+}
+
 function applyRoom06(buf) {
   const parsed = parseRoom06(buf);
   roomSeats = parsed.seats;
   if (roomSeats.length) {
+    const names = roomSeats.map(s => s.name);
+    if (names.length > 1 && new Set(names).size !== names.length) {
+      failIdentity('duplicate_names', names.join(','));
+      return roomSeats;
+    }
     // The player records are the real occupants; drop printable-run noise.
-    roomNames = new Set(roomSeats.map(s => s.name));
+    roomNames = new Set(names);
     if (OPT.username) roomNames.add(OPT.username);
   }
   // The team byte (0 red, 1 blue) is authoritative when present; the seat
@@ -340,6 +394,10 @@ function applyRoom06(buf) {
 
 function parse41(buf) {
   last41 = buf;
+  if (buf.length >= 10) {
+    const dv0 = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+    lastCountdown = dv0.getFloat32(6, true);
+  }
   if (buf.length >= 18) {
     // Decoded from a scoreboard capture: u16 red/blue totals at +14/+16.
     scores = { red: buf.readUInt16LE(14), blue: buf.readUInt16LE(16) };
@@ -392,15 +450,23 @@ function onMatchStart() {
   flow.match = true;
   matchStarted = true;
   poseCache.clear();
+  lastPose.clear();
   // Seat order does not change during a match; re-apply it if the room
   // packet arrived before the match. Do not clear it (that would drop the
   // only authoritative alliance source back to the spawn heuristic).
   if (lastRoom06) applyRoom06(lastRoom06);
   fuelAddr = 0;
+  lastFuelScan = 0;
+  lastFuelVerify = 0;
+  fuelPacket.clear();
+  fuelPacketCount = 0;
   lastMatchTime = null;
+  lastCountdown = null;
   last41 = null;
   scores = { red: 0, blue: 0 };
   autoScores = { red: 0, blue: 0 };
+  lastScoreKey = '';
+  matchEndScheduled = false;
   emit({ type: 'match', phase: phaseFor(lastMatchTime), substage: substageFor(lastMatchTime),
     time: lastMatchTime, seats: roomSeats });
 }
@@ -416,6 +482,7 @@ function handleServerFrame(buf) {
     applyRoom06(buf);
     if (globalThis.__RB_DEBUG) log('ROOM06', buf.toString('hex'));
     log('room state', roomCode, 'names', [...roomNames].slice(0, 12), 'len', buf.length);
+    if (flow.joined && !identityFatal) emitRoom();
   } else if (type === 0x41) {
     parse41(buf);
   } else if (type === 0x21) {
@@ -448,9 +515,11 @@ globalThis.WebSocket = class extends NativeWS {
       else if (ArrayBuffer.isView(e.data)) buf = Buffer.from(e.data.buffer, e.data.byteOffset, e.data.byteLength);
       else if (typeof e.data === 'string') buf = Buffer.from(e.data, 'latin1');
       if (buf) {
-        wslog.push({ dir: 'recv', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
-        if (wslog.length > 20000) wslog.splice(0, 10000);
-        if (buf[0] === 0x06 || buf[0] === 0x41 || buf[0] === 0x42) lastRoomWsId = id;
+        if (wslogEnabled) {
+          wslog.push({ dir: 'recv', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
+          if (wslog.length > 20000) wslog.splice(0, 10000);
+        }
+        if (!lastRoomWsId && (buf[0] === 0x41 || buf[0] === 0x42)) lastRoomWsId = id;
         handleServerFrame(buf);
       }
     });
@@ -477,8 +546,10 @@ globalThis.WebSocket = class extends NativeWS {
       else if (data instanceof ArrayBuffer) buf = Buffer.from(data);
       else if (ArrayBuffer.isView(data)) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
       if (buf) {
-        wslog.push({ dir: 'send', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
-        if (wslog.length > 20000) wslog.splice(0, 10000);
+        if (wslogEnabled) {
+          wslog.push({ dir: 'send', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
+          if (wslog.length > 20000) wslog.splice(0, 10000);
+        }
         if (globalThis.__RB_DEBUG && buf[0] === 0x40) {
           const h = buf.toString('hex');
           if (h !== globalThis.__lastInputHex) { globalThis.__lastInputHex = h; log('INPUT', h); }
@@ -517,8 +588,16 @@ let rafCount = 0;
 const origRAF = globalThis.requestAnimationFrame;
 globalThis.requestAnimationFrame = (cb) => { rafCount++; return origRAF(cb); };
 
-process.on('uncaughtException', (e) => console.error('UNCAUGHT', e));
-process.on('unhandledRejection', (e) => console.error('UNHANDLED', e));
+process.on('uncaughtException', (e) => {
+  console.error('UNCAUGHT', e);
+  try { emit({ type: 'error', error: 'uncaught', detail: String(e) }); } catch {}
+  setTimeout(() => process.exit(1), 100);
+});
+process.on('unhandledRejection', (e) => {
+  console.error('UNHANDLED', e);
+  try { emit({ type: 'error', error: 'unhandled_rejection', detail: String(e) }); } catch {}
+  setTimeout(() => process.exit(1), 100);
+});
 
 // ---------------------------------------------------------------------------
 // wasm memory helpers
@@ -533,6 +612,7 @@ function inField(x, y) { return x > -12 && x < 12 && y > -8 && y < 8; }
 
 let fuelAddr = 0;
 let lastFuelScan = 0;
+let lastFuelVerify = 0;
 let fuelPacketCount = 0;
 let lastFuelLocate = 0;
 const fuelPacket = new Map();
@@ -576,13 +656,14 @@ function parseFuelPacket(buf) {
 function locateFuelFromPacket() {
   if (!mem || !fuelPacketCount) return 0;
   const a = u8();
-  const hay = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
+  const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const probes = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount).slice(0, 10);
   if (!probes.length) return 0;
-  const pat = Buffer.alloc(4);
+  const pat = Buffer.alloc(6);
   for (const probe of probes) {
     pat.writeUInt16LE(probe.x, 0);
     pat.writeUInt16LE(probe.y, 2);
+    pat.writeUInt16LE(probe.z, 4);
     let pos = 0, hits = 0;
     while (hits++ < 40) {
       const hit = hay.indexOf(pat, pos);
@@ -598,10 +679,11 @@ function locateFuelFromPacket() {
         if (flag !== 0 && flag !== 1) continue;
         const mx = a[off + 1] | (a[off + 2] << 8);
         const my = a[off + 3] | (a[off + 4] << 8);
-        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3) ok++;
+        const mz = a[off + 5] | (a[off + 6] << 8);
+        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3 && Math.abs(mz - q.z) <= 3) ok++;
         total++;
       }
-      if (total >= 4 && ok >= Math.max(3, Math.floor(total * 0.7))) {
+      if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)) {
         fuelAddr = base;
         log('fuel array at', '0x' + base.toString(16), 'count', fuelPacketCount);
         return base;
@@ -611,37 +693,67 @@ function locateFuelFromPacket() {
   return 0;
 }
 
+function validFuelRecord(a, off) {
+  if (off + 7 > a.length) return false;
+  const f = a[off];
+  if (f !== 0 && f !== 1) return false;
+  const z = a[off + 5] | (a[off + 6] << 8);
+  return z >= 32700 && z <= 33200;
+}
+
+function verifyFuelBase() {
+  if (!fuelAddr || !fuelPacket.size || !mem) return false;
+  const a = u8();
+  let checked = 0, ok = 0;
+  for (const p of fuelPacket.values()) {
+    if (checked >= 5) break;
+    const off = fuelAddr + p.id * 7;
+    if (off + 7 > a.length) return false;
+    const mx = a[off + 1] | (a[off + 2] << 8);
+    const my = a[off + 3] | (a[off + 4] << 8);
+    const mz = a[off + 5] | (a[off + 6] << 8);
+    if (Math.abs(mx - p.x) <= 3 && Math.abs(my - p.y) <= 3 && Math.abs(mz - p.z) <= 3) ok++;
+    checked++;
+  }
+  return checked >= 3 && ok >= Math.ceil(checked * 0.6);
+}
+
 function scanFuelRun() {
   if (!mem) return 0;
   const count = fuelPacketCount;
-  if (!count || count > 2048) return 0;
+  if (!count) return 0;
   const a = u8();
-  const lim = Math.min(a.length, 0x800000) - count * 7;
-  for (let i = 0x10000; i < lim; i++) {
+  const probe = Math.min(count, 64);
+  const lim = a.length - probe * 7;
+  const spread = count > probe
+    ? [...new Set([count - 1, Math.floor(count / 2), Math.floor(count / 3), Math.floor(count * 2 / 3), 8, 16, 32, 63])]
+      .filter(j => j >= probe && j < count)
+    : [];
+  for (let i = 0x10000; i <= lim; i++) {
     let ok = true;
-    for (let j = 0; j < Math.min(count, 64); j++) {
-      const off = i + j * 7;
-      const f = a[off];
-      if (f !== 0 && f !== 1) { ok = false; break; }
-      const z = a[off + 5] | (a[off + 6] << 8);
-      if (z < 32700 || z > 33200) { ok = false; break; }
+    for (let j = 0; j < probe; j++) {
+      if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
     if (!ok) continue;
-    for (let j = 64; j < count; j++) {
-      const off = i + j * 7;
-      const f = a[off];
-      if (f !== 0 && f !== 1) { ok = false; break; }
-      const z = a[off + 5] | (a[off + 6] << 8);
-      if (z < 32700 || z > 33200) { ok = false; break; }
+    for (const j of spread) {
+      if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
-    if (ok) { fuelAddr = i; log('fuel array (scan) at', '0x' + i.toString(16), 'count', count); return i; }
+    if (ok) {
+      fuelAddr = i;
+      log('fuel array (scan) at', '0x' + i.toString(16), 'count', count);
+      return i;
+    }
   }
   return 0;
 }
 
 function findFuelArray() {
   if (!mem) return 0;
-  if (fuelAddr) return fuelAddr;
+  if (fuelAddr) {
+    if (verifyFuelBase()) return fuelAddr;
+    log('fuel base moved; relocating');
+    fuelAddr = 0;
+  }
   if (fuelPacket.size) {
     const b = locateFuelFromPacket();
     if (b) return b;
@@ -650,6 +762,7 @@ function findFuelArray() {
 }
 
 function readFuel() {
+  refreshFrame();
   if (!fuelAddr || !mem || !fuelPacketCount) return [];
   const a = u8();
   const count = fuelPacketCount;
@@ -678,19 +791,29 @@ function readFuel() {
 }
 
 const poseCache = new Map();
+const poseMissUntil = new Map();
 function findPose(name) {
   if (!mem || !name) return null;
+  const nowMs = Date.now();
+  if ((poseMissUntil.get(name) || 0) > nowMs) return null;
   const a = u8();
   const cached = poseCache.get(name);
   if (cached != null && cached > 0 && cached + 0x60 < a.length && a[cached - 1] === 1) {
+    const nameLen = Buffer.byteLength(name);
+    const nameBytes = a.subarray(cached, cached + nameLen);
+    if (nameBytes.toString('latin1') !== name || a[cached + nameLen] !== 0) {
+      poseCache.delete(name);
+    } else {
     const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x23);
     const heading = f32(cached + 0x3f), valid = f32(cached + 0x57);
     if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(heading) && inField(x, y) && Math.abs(heading) <= 20 && valid === 1) {
+      poseMissUntil.delete(name);
       return { x, y, z, heading, addr: cached, source: (cached >= 0x500000 && cached < 0x530000) ? 'predicted' : 'acked' };
+    }
     }
     poseCache.delete(name);
   }
-  const buf = Buffer.from(a.buffer, a.byteOffset, Math.min(a.byteLength, 0x800000));
+  const buf = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const needle = Buffer.from(name, 'utf8');
   let pos = 0;
   const candidates = [];
@@ -700,6 +823,8 @@ function findPose(name) {
     pos = occ + 1;
     if (occ < 1 || occ + 0x60 >= a.length) continue;
     if (a[occ - 1] !== 1) continue;
+    const nameLen = Buffer.byteLength(name);
+    if (occ + nameLen >= a.length || a[occ + nameLen] !== 0) continue;
     const x = f32(occ + 0x1b);
     const y = f32(occ + 0x1f);
     const z = f32(occ + 0x23);
@@ -711,13 +836,17 @@ function findPose(name) {
     if (valid !== 1) continue;
     candidates.push({ x, y, z, heading, addr: occ });
   }
-  if (!candidates.length) return null;
+  if (!candidates.length) {
+    poseMissUntil.set(name, Date.now() + 1000);
+    return null;
+  }
   // The render/model heap region carries a higher-rate predicted copy.
   const predicted = candidates.filter(c => c.addr >= 0x500000 && c.addr < 0x530000);
   const chosen = predicted.length
     ? predicted.sort((a, b) => b.addr - a.addr)[0]
     : candidates.sort((a, b) => a.addr - b.addr)[0];
   poseCache.set(name, chosen.addr);
+  poseMissUntil.delete(name);
   return { ...chosen, source: predicted.length ? 'predicted' : 'acked' };
 }
 
@@ -732,6 +861,8 @@ function normalizeAngle(a) {
 }
 
 function activeAlliance() {
+  if (OPT.frameAlliance === 'r' || OPT.frameAlliance === 'R') OPT.frameAlliance = 'red';
+  if (OPT.frameAlliance === 'b' || OPT.frameAlliance === 'B') OPT.frameAlliance = 'blue';
   if (OPT.frameAlliance === 'red' || OPT.frameAlliance === 'blue') return OPT.frameAlliance;
   if (ourAllianceCache) return ourAllianceCache;
   const p = findPose(OPT.username);
@@ -750,20 +881,27 @@ function activeAlliance() {
 function readIntake(addr) {
   if (!addr || !mem) return null;
   const a = u8();
-  if (addr + 0x57 >= a.length) return null;
+  if (addr + 0x56 >= a.length) return null;
   return (a[addr + 0x56] & 0x40) !== 0;
 }
 
 function readHopper(addr) {
   if (!addr || !mem) return null;
   const a = u8();
-  if (addr + 0x4f >= a.length) return null;
+  if (addr + 0x4e >= a.length) return null;
   const n = a[addr + 0x4b] | (a[addr + 0x4c] << 8) | (a[addr + 0x4d] << 16) | (a[addr + 0x4e] << 24);
   return n >= 0 && n <= 255 ? n : null;
 }
 
+let frameBlue = false;
+function refreshFrame() {
+  const alliance = activeAlliance();
+  frameBlue = !OPT.fieldFrame && alliance === 'blue';
+  return frameBlue;
+}
+
 function inAllianceFrame() {
-  return !OPT.fieldFrame && activeAlliance() === 'blue';
+  return frameBlue;
 }
 
 function allianceVec(x, y) {
@@ -775,6 +913,7 @@ function allianceHeading(h) {
 }
 
 function readRobots() {
+  refreshFrame();
   const out = [];
   for (const name of roomNames) {
     let p = findPose(name);
@@ -788,6 +927,7 @@ function readRobots() {
       out.push({
         name, is_me: name === OPT.username, alliance,
         alliance_source: allianceSourceByName.get(name) || 'spawn', stale: true,
+        pose_source: 'stale',
         x: +sp.x.toFixed(4), y: +sp.y.toFixed(4), z: +prev.z.toFixed(4),
         heading: +allianceHeading(prev.heading).toFixed(4),
         vx: 0, vy: 0, vz: 0, yawRate: 0,
@@ -863,7 +1003,9 @@ function emitFuelBinary(fuel, frameSeq) {
   for (let i = 0; i < count; i++) {
     const f = fuel[i];
     const off = 8 + i * 7;
-    const q = (v) => Math.max(0, Math.min(0xffff, Math.round(v * 4096) + 0x8000));
+    const q = (v) => Number.isFinite(v)
+      ? Math.max(0, Math.min(0xffff, Math.round(v * 4096) + 0x8000))
+      : 0x8000;
     payload[off] = f.present ? 1 : 0;
     payload.writeUInt16LE(q(f.x), off + 1);
     payload.writeUInt16LE(q(f.y), off + 3);
@@ -872,10 +1014,27 @@ function emitFuelBinary(fuel, frameSeq) {
   writeFrame(2, frameSeq, payload);
 }
 
-let buildHash = null;
-try { buildHash = JSON.parse(fs.readFileSync(BUILD_FILE, 'utf8')).build; } catch {}
-if (!buildHash) {
-  log('warning: no build hash in', BUILD_FILE, '(run node prepare.mjs to pin the build)');
+let buildMeta = null;
+try { buildMeta = JSON.parse(fs.readFileSync(BUILD_FILE, 'utf8')); } catch {}
+const buildHash = buildMeta && buildMeta.build ? buildMeta.build : null;
+if (!buildHash && !OPT.noBuildCheck) {
+  log('build pin failed: no build hash in', BUILD_FILE, '(run node prepare.mjs or pass --no-build-check)');
+  process.exit(3);
+}
+if (buildMeta && buildMeta.files) {
+  for (const [file, expected] of Object.entries(buildMeta.files)) {
+    try {
+      const actual = crypto.createHash('sha256').update(fs.readFileSync(path.join(ASSET_DIR, file))).digest('hex');
+      if (actual !== expected) {
+        log('build pin failed: hash mismatch for', file, 'expected', expected, 'got', actual);
+        emit({ type: 'error', error: 'asset_hash_mismatch', file });
+        process.exit(3);
+      }
+    } catch (e) {
+      log('build pin failed: cannot hash', file, String(e));
+      process.exit(3);
+    }
+  }
 }
 if (OPT.expectBuild) {
   if (!buildHash) {
@@ -889,22 +1048,29 @@ if (OPT.expectBuild) {
 }
 if (!OPT.noBuildCheck) {
   const origin = OPT.server ? `http://${OPT.server}/` : 'https://rebuildsim.com/';
-  nativeFetch(origin, { redirect: 'follow' })
-    .then((r) => r.text())
+  nativeFetch(origin, { redirect: 'follow', signal: AbortSignal.timeout(10000) })
+    .then((r) => {
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      return r.text();
+    })
     .then((html) => {
       const m = html.match(/BUILD\s*=\s*["']([0-9a-f]+)["']/);
-      if (!m) { log('build check: could not find BUILD on', origin, '(continuing)'); return; }
+      if (!m) throw new Error('BUILD hash not found');
       const live = m[1];
-      if (buildHash && live !== buildHash) {
+      if (live !== buildHash) {
         log('build drift: assets are', buildHash, 'but server is', live, '- run node prepare.mjs');
         emit({ type: 'error', error: 'build_drift', cached: buildHash, server: live });
         setTimeout(() => process.exit(3), 100);
         return;
       }
-      emit({ type: 'build', build: buildHash || live, server_build: live, ok: true });
+      emit({ type: 'build', build: buildHash, server_build: live, ok: true });
       log('build check ok', live);
     })
-    .catch((e) => log('build check skipped:', String(e)));
+    .catch((e) => {
+      log('build check failed:', String(e));
+      emit({ type: 'error', error: 'build_check_failed', detail: String(e) });
+      setTimeout(() => process.exit(3), 100);
+    });
 }
 emit({ type: 'ready', build: buildHash, binary: OPT.binary });
 setInterval(() => emit({ type: 'heartbeat', t: Date.now() / 1000, ws_open: wsOpen, ws_closed: wsClosed }), 1000);
@@ -973,7 +1139,10 @@ function applyInput(cmd) {
 function tapBox(index, x, y, text) {
   try {
     Module.ccall('rb_tap_text_box', null, ['number', 'number', 'number'], [index, x, y]);
-    if (text != null) Module.ccall('rb_type_text', null, ['string'], [String(text)]);
+    if (text != null) {
+      Module.ccall('rb_type_erase', null, ['number'], [64]);
+      Module.ccall('rb_type_text', null, ['string'], [String(text)]);
+    }
   } catch (e) { log('text box error', String(e)); }
 }
 
@@ -996,9 +1165,14 @@ function onTrack(name, params) {
       }, 400);
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
-    } else if (path === '/room' && !flow.joined) {
-      flow.joined = true;
-      emit({ type: 'room', code: roomCode, host, seated });
+    } else if (path === '/room') {
+      // The room screen is visible. Do not mark the session joined here; the
+      // room_join track event carries host/seated/role and fires shortly after.
+      if (flow.match) {
+        resetMatchState();
+        emitRoom();
+      }
+      if (OPT.debug) log('room screen');
     } else if (path === '/multi/match') {
       onMatchStart();
     }
@@ -1016,18 +1190,23 @@ function onTrack(name, params) {
       if (OPT.code) {
         tapBox(1, 218, 274, OPT.code);
         setTimeout(() => globalThis.__ctl.click(410, 274), 400);
-      } else {
+      } else if (OPT.create) {
         globalThis.__ctl.click(280, 198);
+      } else {
+        log('no --code or --create; refusing to open a public room');
+        emit({ type: 'error', error: 'missing_join_mode' });
+        setTimeout(() => process.exit(2), 100);
       }
     }, 300);
   }
   if (name === 'room_join' && !flow.joined) {
     flow.joined = true;
-    host = p.is_host === 'yes';
+    host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
+    role = p.role;
     roomCode = roomCode || OPT.code;
     log('joined room', roomCode, 'host', host, 'role', p.role);
-    emit({ type: 'room', code: roomCode, host, seated, role: p.role, seats: roomSeats });
+    emitRoom();
     const readyAndStart = () => {
       if (host && OPT.start) {
         setTimeout(() => globalThis.__ctl.click(646, 688), 900);
@@ -1080,6 +1259,15 @@ setTimeout(() => {
   } catch (e) { log('gamepad event error', String(e)); }
 }, 4200);
 
+// Fail loudly if the wasm memory was never captured.
+setTimeout(() => {
+  if (!mem) {
+    log('wasm memory was not captured; aborting');
+    try { emit({ type: 'error', error: 'memory_unavailable' }); } catch {}
+    process.exit(2);
+  }
+}, 30000);
+
 // title screen: press any button after the runtime has had a moment
 setTimeout(() => {
   if (flow.booted) return;
@@ -1087,8 +1275,13 @@ setTimeout(() => {
   log('dismiss title');
   globalThis.__ctl.tapKey(' ', 'Space', 32);
 }, 3500);
-// fallback: if the title is slow, press again
-setTimeout(() => { if (!flow.menu) { log('retry title'); globalThis.__ctl.tapKey(' ', 'Space', 32); } }, 7000);
+// retry the title until the menu is visible
+let titleRetries = 0;
+const titleTimer = setInterval(() => {
+  if (flow.menu || titleRetries++ >= 12) { clearInterval(titleTimer); return; }
+  log('retry title');
+  globalThis.__ctl.tapKey(' ', 'Space', 32);
+}, 2000);
 
 // locate the fuel array once the match starts (and retry if the heap moves)
 setInterval(() => {
@@ -1104,16 +1297,24 @@ let seq = 0;
 let lastScoreKey = '';
 setInterval(() => {
   if (!mem || !matchStarted) return;
+  const fuelNow = Date.now();
+  if (fuelAddr && fuelNow - lastFuelVerify > 2000) {
+    lastFuelVerify = fuelNow;
+    if (!verifyFuelBase()) {
+      log('fuel base moved; relocating');
+      fuelAddr = 0;
+    }
+  }
   if (!fuelAddr) {
-    const now = Date.now();
-    if (now - lastFuelScan > 2000) { lastFuelScan = now; findFuelArray(); }
+    if (fuelNow - lastFuelScan > 2000) { lastFuelScan = fuelNow; findFuelArray(); }
   }
   const robots = readRobots();
   const fuel = readFuel();
-  const phase = phaseFor(lastMatchTime);
-  const substage = substageFor(lastMatchTime);
+  const countdown = lastCountdown != null && lastCountdown > 0 && (lastMatchTime == null || lastMatchTime <= 0);
+  const phase = countdown ? 'countdown' : phaseFor(lastMatchTime);
+  const substage = countdown ? 'prematch' : substageFor(lastMatchTime);
   const me = robots.find(r => r.is_me) || null;
-  const hub = computeHub(lastMatchTime, autoScores.red, autoScores.blue, activeAlliance(), OPT.hubOrder);
+  const hub = computeHub(countdown ? null : lastMatchTime, autoScores.red, autoScores.blue, activeAlliance(), OPT.hubOrder);
   const s = seq++;
   const key = `${scores.red}:${scores.blue}`;
   if (key !== lastScoreKey) {
@@ -1136,16 +1337,21 @@ setInterval(() => {
     protocol: protocolVersion,
     ws_open: wsOpen,
     ws_closed: wsClosed,
-    frame: OPT.fieldFrame ? 'field' : 'alliance',
-    alliance: activeAlliance(),
+    frame: activeAlliance() ? (OPT.fieldFrame ? 'field' : 'alliance') : 'unknown',
+    alliance: activeAlliance() || 'unknown',
     hub,
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: 55,
     intake_active: me ? me.intake_active : null,
+    fuel_ok: fuelPacketCount > 0 && fuel.length === fuelPacketCount,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
   emit(state);
+  if (lastMatchTime != null && lastMatchTime <= 0 && !matchEndScheduled) {
+    matchEndScheduled = true;
+    setTimeout(() => { resetMatchState(); matchEndScheduled = false; }, 500);
+  }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
 let trace = null;
@@ -1193,6 +1399,9 @@ function startTrace(cmd) {
 // stdin command API
 const readline = require('node:readline');
 const rl = readline.createInterface({ input: process.stdin, terminal: false });
+if (process.argv.includes('--exit-on-stdin-close')) {
+  rl.on('close', () => { log('stdin closed; exiting'); process.exit(0); });
+}
 rl.on('line', (line) => {
   const s = line.trim();
   if (!s) return;

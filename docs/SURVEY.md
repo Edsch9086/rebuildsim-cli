@@ -84,7 +84,8 @@ Measured on this machine (Node 26, 1280×720 canvas, no-op GL, one match):
 
 - user CPU: **3.83 s over 20 s** ≈ 19% of one core;
 - max RSS: **~180 MB** (26 MB wasm linear memory + V8/Node overhead);
-- 456 fuel + player state + match packets at 60 fps.
+- 456 fuel + player state + match packets at 60 fps, one bot. Six bots and
+  4,300 fuel have not been measured; treat these as lower bounds.
 
 The game's anti-automation checks (`rb_automation_signs`) look at
 `navigator.webdriver`, headless UA/brands, and a software WebGL renderer. The
@@ -96,7 +97,8 @@ harness. This is a technical bypass of the browser guard; see ethics section.
 
 ### 4.1 Fuel — solved, dynamic length
 
-The server's `0x42` packet and the wasm memory both use **1-based IDs** for fuel.
+The server's `0x42` packet and the wasm memory both use **0-based IDs** for fuel
+(`id 0` is the first record).
 The total count is `u16` at packet offset 5; it is **not fixed**. The public
 update notes say the staged-fuel rule ranges from ~25% (~135 fuel) to as much as
 the field can hold (~4,300 fuel). The engine must therefore never assume 456.
@@ -129,15 +131,16 @@ u16 z              // bottom; add ~0.045 m for the centre
 
 The engine locates the array by taking a recent packet record, searching memory
 for its `x,y` pair, deriving `base = hit - 1 - id*7`, and verifying several
-packet records against that base. This survives both a changing fuel count and
-heap reallocation. Validated: a 25% rule produced **150 fuel**, a 50% rule 255, and the default
-build 456; the locator found a new base each time (`fuel_count` matched). If fewer than four records are available it falls back to a
-run scan for `count <= 2048`. The engine emits `fuel_count` and all `count`
-records (with `present`), and merges the packet's velocities/flags when available.
-For 4,000+ fuel the JSON state is large, so the engine has an opt-in
-`--binary` framing: packed 7-byte fuel records (plus a `RSB1` header) immediately
-before the JSON state, and the Rust `Engine` reattaches them. JSON mode remains
-available; `fuel_count` and all records are identical in both.
+packet records against that base. The cached base is re-verified against packet
+records every ~2 s and relocated if it moved. Validated: a 25% rule produced
+**150 fuel**, a 50% rule 255, and the default build 456. The fallback run scan
+checks up to 64 consecutive records plus a spread of later records, so it is not
+limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, and all `count`
+records (with `present`), and merges the packet's velocities/flags in JSON mode.
+For 4,000+ fuel the JSON state is large, so the engine has an opt-in `--binary`
+framing: packed 7-byte fuel records (plus a `RSB1` header) immediately before the
+JSON state, and the Rust `Engine` reattaches them. Binary records carry only
+`present/x/y/z`; `vx/vy/vz/count/flags` are JSON-mode only.
 
 ### 4.2 Robot poses — live local simulation
 
@@ -180,8 +183,9 @@ ends both copies are live; the predicted one is simply higher-rate.
 
 The engine emits a top-level `me` object and an `is_me` flag on every robot,
 matched by the CLI username. This avoids the six-robot "which one is mine"
-failure mode. A `stale` fallback keeps `me` present if a memory read misses one
-frame.
+failure mode. A `stale` fallback reuses the last pose for up to 2 s and sets
+`stale: true` / `pose_source: "stale"`; duplicate player names are rejected with
+exit 8 because name-keyed identity cannot distinguish them.
 
 Alliance is decoded from the `0x06` room state. Player records appear in seat
 order with the signature `01 <team> 67 01 02 00 00 <name-len> <name...>`;
@@ -189,8 +193,9 @@ order with the signature `01 <team> 67 01 02 00 00 <name-len> <name...>`;
 and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
-arrived. `is_me` is exact by username. Coordinates are global field
-coordinates. The engine now reports positions, headings, and velocities in the
+arrived. `is_me` is exact by username, and duplicate names are a fatal identity
+error. Coordinates are global field coordinates. The engine reports positions,
+headings, and velocities in the
 **driver/alliance frame by default**: for blue it rotates everything by 180
 degrees, so red and blue bots receive identical coordinates and `Input.y=1`
 drives toward the opponent on both sides. A bot should not need to know its
@@ -331,7 +336,9 @@ finished.
 - Reuses the exact game build and physics; no protocol/physics reimplementation.
 - Automatically matches the server's build/protocol version.
 - Headless, no browser, no Playwright, no GPU.
-- Cost: ~19% of a core, ~180 MB RSS per bot on Node 26.
+- Cost: ~19% of a core, ~180 MB RSS per bot on Node 26 for a single-bot,
+  default-fuel run. Six bots and 4,300 fuel have not been measured; treat those
+  numbers as a lower bound.
 - Rust remains the performance-critical control plane; the engine can be swapped
   for a native Wasmtime implementation later without changing the bot API.
 
@@ -444,8 +451,9 @@ These are the reproducible checks used for the current build (`4a8a0e8`).
 
 ### 0x06 seat parser
 
-`node engine/room06_test.cjs` parses a synthetic 4-seat packet and the captured
-live packet. Captured result:
+`node engine/room06_test.cjs` parses a synthetic 5-seat packet. A captured live
+packet can be supplied with `RB_ROOM06_FIXTURE`. The captured result from the
+4-player test was:
 
 ```
 seat 0 HostA  team=0 red
@@ -471,9 +479,9 @@ SEATS [{"seat":0,"name":"RedHost",...red},
        {"seat":3,"name":"BlueD","team_flag":1,"alliance":"blue"}]
 STATE {"phase":"auto","frame":"alliance",
        "robots":[RedHost red ME, RedB red, RedC red, BlueD blue]}
-DELTA red {"dx":4.114,"dy":0}
+DELTA red {"dx":3.722,"dy":0}
 VERDICT {"seats4":true,"fourthBlue":true,"allUnique":true,
-         "hostMe":true,"robots4":true,"redForward":true,"frame":"alliance"}
+         "hostMe":true,"robots4":true,"redForward":true,"frameAlliance":true}
 ```
 
 This proves four unique names occupy four seats, the host's `me` is exactly its
@@ -486,11 +494,11 @@ A real blue engine could not be added under the public per-IP limit, so the
 transform is tested directly with `engine/frame_test.cjs`:
 
 ```
-ALLIANCE {"before":{"x":4.6735,"y":-3.4001,"frame":"alliance","alliance":"blue",
+ALLIANCE {"before":{"x":4.6736,"y":-3.4001,"frame":"alliance","alliance":"blue",
                     "fuel0":{"x":0.366,"y":1.0466}},
-          "after":{"x":-4.845,"y":-3.4002},"dx":-9.518}
-FIELD    {"before":{"x":-4.6735,"y":3.4001,"frame":"field",...},
-          "after":{"x":2.413,"y":3.4003},"dx":7.086}
+          "after":{"x":-4.3562,"y":-3.4002},"dx":-9.03}
+FIELD    {"before":{"x":-4.6736,"y":3.4001,"frame":"field",...},
+          "after":{"x":4.281,"y":3.4002},"dx":8.955}
 VERDICT {"allianceFrame":true,"fieldFrame":true,"rotated":true,
          "fuelRotated":true,"blueForwardNegative":true,
          "fieldForwardPositive":true,"headingRotated":true}
@@ -500,9 +508,10 @@ With the blue output frame forced, a red-spawn world pose `(-4.67,3.4)` is
 reported as `(4.67,-3.4)`, fuel and heading rotate 180 degrees, and forward
 input decreases normalized x. A real blue client starts at the mirrored world
 spawn `(+4.67,-3.4)`, so its normalized spawn is `(-4.67,3.4)` and forward
-**increases** normalized x — exactly the same coordinates and control response
-as red. This is the behavior the API guarantees by default; `--field-frame`
-restores raw global coordinates.
+**increases** normalized x — the same coordinates and control response the API
+is designed to provide for red. This test proves the output-frame rotation; a
+live headless blue seat should still be used to confirm the game internally
+inverts blue driver input. `--field-frame` restores raw global coordinates.
 
 ### Hub status
 
@@ -553,6 +562,18 @@ exit=5
 engine ws close id=Some(2) code=Some(1006) room=Some(true)
 room WebSocket closed; exiting (use --allow-ws-close to keep running)
 exit=6
+
+# engine joins as a spectator
+joined as a spectator; this bot cannot drive
+exit=7
+
+# engine never emits a room join
+join timeout: no room join after 2.0s; engine is stalled or blocked
+exit=5
+
+# build.json hash mismatch
+build pin failed: hash mismatch for index.js
+exit=3
 ```
 
 The real engine's reader now runs on a background thread, so `Engine` callers
@@ -576,9 +597,9 @@ build/protocol failures.
 `node engine/binary_test.cjs`:
 
 ```
-OK binary state {"seq":0,"phase":"countdown","substage":"auto",
- "fuel_count":150,"fuel_bin":true,"fuel_frames":1,"json_frames":9,
- "scores":{"red":0,"blue":0},"time":163}
+OK binary state {"seq":0,"phase":"auto","substage":"auto",
+ "fuel_count":150,"fuel_ok":true,"fuel_bin":true,"fuel_frames":1,
+ "json_frames":19,"scores":{"red":0,"blue":0},"time":163}
 packed records 150
 ```
 

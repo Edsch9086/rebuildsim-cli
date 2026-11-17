@@ -12,6 +12,11 @@ const path = require('node:path');
 
 const ENGINE = process.env.RB_ENGINE || path.join(__dirname, 'headless.cjs');
 const ASSETS = process.env.RB_ASSET_DIR || path.join(__dirname, 'cache');
+if (process.env.RB_ALLOW_LIVE_TESTS !== '1') {
+  console.log('SKIP live test: set RB_ALLOW_LIVE_TESTS=1 to create/join a private room');
+  process.exit(0);
+}
+
 const OUT = process.env.RB_TEST_OUT || path.join(os.tmpdir(), 'rebuildsim-tests');
 fs.mkdirSync(OUT, { recursive: true });
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -48,7 +53,7 @@ async function run(extra, drive) {
   const field = await run(['--frame-alliance', 'blue', '--field-frame'], true);
   console.log('ALLIANCE', JSON.stringify(alliance));
   console.log('FIELD   ', JSON.stringify(field));
-  console.log('VERDICT', JSON.stringify({
+  const verdict = {
     allianceFrame: alliance.before.frame === 'alliance' && alliance.before.alliance === 'blue',
     fieldFrame: field.before.frame === 'field',
     rotated: Math.abs(alliance.before.x + field.before.x) < 0.01 && Math.abs(alliance.before.y + field.before.y) < 0.02,
@@ -56,6 +61,7 @@ async function run(extra, drive) {
     blueForwardNegative: alliance.dx < -0.5,
     fieldForwardPositive: field.dx > 0.5,
     headingRotated: Math.abs(Math.abs(alliance.before.h - field.before.h) - Math.PI) < 0.05,
-  }));
-  process.exit(0);
+  };
+  console.log('VERDICT', JSON.stringify(verdict));
+  process.exit(Object.values(verdict).every(Boolean) ? 0 : 1);
 })();

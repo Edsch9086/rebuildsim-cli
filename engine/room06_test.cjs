@@ -1,8 +1,6 @@
 // Seat parser tests. Run: node engine/room06_test.cjs
 const assert = require('node:assert');
 const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
 const { parseRoom06 } = require('./room06.cjs');
 
 // Synthetic room state: 4 player records, seats 0-2 red, seat 3 blue.
@@ -19,18 +17,20 @@ function rec(team, name) {
 }
 const header = Buffer.alloc(64);
 header.write('06ABCDE', 0, 'latin1');
-const synthetic = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1'), rec(0, 'Red2'), rec(1, 'BlueCap')]);
+const synthetic = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1'), rec(0, 'Red2'), rec(1, 'BlueCap'), rec(0, 'RedFour')]);
 const parsed = parseRoom06(synthetic);
 assert.deepStrictEqual(
   parsed.seats.map((s) => [s.seat, s.name, s.alliance]),
-  [[0, 'RedCap', 'red'], [1, 'Red1', 'red'], [2, 'Red2', 'red'], [3, 'BlueCap', 'blue']],
+  [[0, 'RedCap', 'red'], [1, 'Red1', 'red'], [2, 'Red2', 'red'],
+   [3, 'BlueCap', 'blue'], [4, 'RedFour', 'red']],
 );
 console.log('synthetic:', JSON.stringify(parsed.seats));
+assert.strictEqual(parsed.seats[4].team_flag, 0);
+assert.strictEqual(parsed.seats[4].alliance, 'red', 'explicit red flag at index >= 3 must stay red');
 
 // Captured 4-player packet from a live lobby (all names were Host4 because the
 // browser tabs shared a name; the seat/alliance layout is what matters).
-const fixture = process.env.RB_ROOM06_FIXTURE
-  || path.join(os.tmpdir(), 'opencode', 'f4_room06.bin');
+const fixture = process.env.RB_ROOM06_FIXTURE || '';
 if (fs.existsSync(fixture)) {
   const real = parseRoom06(fs.readFileSync(fixture));
   assert.strictEqual(real.seats.length, 4, 'four seats');
@@ -39,6 +39,6 @@ if (fs.existsSync(fixture)) {
   assert.strictEqual(real.seats[3].team_flag, 1);
   console.log('captured:', JSON.stringify(real.seats));
 } else {
-  console.log('captured fixture not found, skipped');
+  console.log('captured fixture not provided (set RB_ROOM06_FIXTURE to test one)');
 }
 console.log('room06 tests OK');

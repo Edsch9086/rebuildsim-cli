@@ -15,6 +15,11 @@ import { fileURLToPath } from 'node:url';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ENGINE = process.env.RB_ENGINE || path.join(__dirname, 'headless.cjs');
 const ASSETS = process.env.RB_ASSET_DIR || path.join(__dirname, 'cache');
+if (process.env.RB_ALLOW_LIVE_TESTS !== '1') {
+  console.log('SKIP live test: set RB_ALLOW_LIVE_TESTS=1 to create/join a private room');
+  process.exit(0);
+}
+
 const OUT = process.env.RB_TEST_OUT || path.join(os.tmpdir(), 'rebuildsim-tests');
 fs.mkdirSync(OUT, { recursive: true });
 const exe = process.env.PLAYWRIGHT_CHROMIUM
@@ -93,21 +98,21 @@ const afterBlue=pose('BlueD');
 const delta=(a,b)=>a&&b?{dx:+(b.x-a.x).toFixed(3),dy:+(b.y-a.y).toFixed(3)}:null;
 console.log('AFTER red',JSON.stringify(afterRed),'blue',JSON.stringify(afterBlue));
 console.log('DELTA red',JSON.stringify(delta(beforeRed,afterRed)),'blue',JSON.stringify(delta(beforeBlue,afterBlue)));
-console.log('VERDICT',JSON.stringify({
+const verdict = {
   seats4: seats&&seats.length===4,
   fourthBlue: seats&&seats[3]&&seats[3].alliance==='blue',
   allUnique: seats?new Set(seats.map(s=>s.name)).size===4:false,
   hostMe: lastState&&lastState.me&&lastState.me.name==='RedHost',
   robots4: lastState&&lastState.robots.length===4,
   redForward: delta(beforeRed,afterRed)&&delta(beforeRed,afterRed).dx>0.5,
-  // The host is red, so it sees BlueD in the red frame; a live blue input
-  // should move it toward negative x. Remote pose updates can lag, so this is
-  // informational rather than part of the verdict.
-  blueSeenMoving: delta(beforeBlue,afterBlue)&&Math.abs(delta(beforeBlue,afterBlue).dx)>0.1,
-  frame: lastState&&lastState.frame,
-}));
+  frameAlliance: lastState&&lastState.frame==='alliance',
+};
+console.log('VERDICT',JSON.stringify(verdict));
+const failed = Object.entries(verdict).filter(([,v]) => v !== true);
+if (failed.length) console.error('FAILED', JSON.stringify(failed));
+const exitCode = failed.length ? 1 : 0;
 await blue.page.screenshot({path:path.join(OUT, 'b4e_blue_after.png')});
 await host.stdin.write('{"type":"quit"}\n'); host.kill();
 for(const b of bots) await b.ctx.close();
 await browser.close();
-process.exit(0);
+process.exit(exitCode);
