@@ -271,6 +271,32 @@ if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join
 }
 OPT.code = String(OPT.code || '').trim().toUpperCase();
 log('engine options', JSON.stringify(OPT));
+function optionError(error, msg) {
+  console.error(msg);
+  try { emit({ type: 'error', error, detail: msg }); } catch {}
+  setTimeout(() => process.exit(2), 100);
+}
+const valueFlags = ['--code', '--username', '--spawn', '--server', '--fuel',
+  '--frame-alliance', '--hub-order', '--expect-build', '--emit-hz', '--asset-dir'];
+for (const flag of valueFlags) {
+  const i = process.argv.indexOf(flag);
+  if (i >= 0 && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith('--'))) {
+    optionError('missing_value', `${flag} needs a value`);
+  }
+}
+if (OPT.code && !/^[A-Z0-9]{5}$/.test(OPT.code)) {
+  optionError('invalid_code', 'invalid --code: use a 5-character room code');
+}
+if (OPT.hubOrder) {
+  if (/^r(ed)?$/i.test(OPT.hubOrder)) OPT.hubOrder = 'red';
+  else if (/^b(lue)?$/i.test(OPT.hubOrder)) OPT.hubOrder = 'blue';
+  else optionError('invalid_hub_order', 'invalid --hub-order: use red or blue');
+}
+if (OPT.frameAlliance) {
+  if (/^r(ed)?$/i.test(OPT.frameAlliance)) OPT.frameAlliance = 'red';
+  else if (/^b(lue)?$/i.test(OPT.frameAlliance)) OPT.frameAlliance = 'blue';
+  else optionError('invalid_frame_alliance', 'invalid --frame-alliance: use red or blue');
+}
 if (!OPT.username || OPT.username !== OPT.username.trim()
     || Buffer.byteLength(OPT.username, 'utf8') > 10
     || !/^[\x20-\x7e]+$/.test(OPT.username)) {
@@ -290,15 +316,20 @@ if (OPT.fuel) {
 }
 
 if (OPT.server) {
-  let host = OPT.server;
+  let host = '';
   let port = '';
   const bracketed = OPT.server.match(/^\[([^\]]+)\]:(\d+)$/);
+  const plain = OPT.server.match(/^([^:]+):(\d+)$/);
   if (bracketed) {
-    host = bracketed[1];
-    port = bracketed[2];
+    host = bracketed[1]; port = bracketed[2];
+  } else if (plain) {
+    host = plain[1]; port = plain[2];
   } else {
-    const i = OPT.server.lastIndexOf(':');
-    if (i > 0) { host = OPT.server.slice(0, i); port = OPT.server.slice(i + 1); }
+    optionError('invalid_server', 'invalid --server: use HOST:PORT (IPv6 as [addr]:port)');
+  }
+  const portNum = Number(port);
+  if (!host || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+    optionError('invalid_server', 'invalid --server port');
   }
   globalThis.location.host = OPT.server;
   globalThis.location.hostname = host;
@@ -318,7 +349,7 @@ let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
-let matchStartedAt = 0, seatMissCount = 0, seatMissAt = 0;
+let matchStartedAt = 0, lastOurSeatAt = 0;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -410,8 +441,7 @@ function resetMatchState() {
   if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
   if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
   seatMissingSince = 0;
-  seatMissCount = 0;
-  seatMissAt = 0;
+  lastOurSeatAt = 0;
   last41At = 0;
   fuelVerifyFails = 0;
   poseCache.clear();
@@ -438,17 +468,10 @@ function resetMatchState() {
   lastScoreKey = '';
 }
 
-function noteSeatMissingPacket() {
-  const now = Date.now();
-  if (!seatMissAt || now - seatMissAt > 2000) seatMissCount = 0;
-  seatMissAt = now;
-  seatMissCount++;
-  if (seatMissCount >= 2) noteSeatPresence(false);
-}
-
 function noteSeatPresence(ours) {
   if (ours) {
     seatMissingSince = 0;
+    lastOurSeatAt = Date.now();
     if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
     if (spectatorExitTimer) {
       clearTimeout(spectatorExitTimer);
@@ -496,7 +519,11 @@ function applyRoom06(buf) {
     // list but debounce the missing-seat path so repeated empty packets can
     // demote/exit instead of leaving a zombie.
     log('room state parse produced no seats; keeping last good seat list');
-    if (flow.joined) noteSeatMissingPacket();
+    if (flow.joined && seated && lastOurSeatAt
+        && Date.now() - lastOurSeatAt > 15000) {
+      log('no seat in any room packet for 15s; starting demotion');
+      noteSeatPresence(false);
+    }
     return false;
   }
   if (roomSeats.length) {
@@ -506,7 +533,7 @@ function applyRoom06(buf) {
       // Two consecutive omissions are required before starting the demotion
       // timer; one partial packet must not kill a live match.
       log('room packet omits our seat; keeping last good seat list');
-      noteSeatMissingPacket();
+      noteSeatPresence(false);
       return false;
     }
     noteSeatPresence(true);
@@ -561,7 +588,7 @@ function applyRoom06(buf) {
     const ours = roomSeats.some(s => s.name === OPT.username);
     if (matchStarted && seated && !ours) {
       log('seat missing during match; debouncing');
-      noteSeatMissingPacket();
+      noteSeatPresence(false);
       return false;
     }
     if (!ours) {
@@ -658,6 +685,7 @@ function handleServerFrame(buf, wsId) {
       log('ignoring room packet with malformed code');
       return;
     }
+    if (!lastRoomWsId && wsId && wsId !== 1) lastRoomWsId = wsId;
     if (roomCode && nextCode !== roomCode) {
       log('room code changed', roomCode, '->', nextCode);
       clearRoomIdentity();
@@ -882,19 +910,16 @@ function locateFuelFromPacket() {
       pos = hit + 1;
       const base = hit - 1 - probe.id * 7;
       if (base < 0) continue;
-      let ok = 0, total = 0;
+      let ok = 0, total = 0, presentMatches = 0;
       for (const q of probes) {
-        const off = base + q.id * 7;
-        if (!validFuelRecord(a, off)) continue;
-        if (a[off] === 0 || q.count === 0) { ok++; total++; continue; }
-        const mx = a[off + 1] | (a[off + 2] << 8);
-        const my = a[off + 3] | (a[off + 4] << 8);
-        const mz = a[off + 5] | (a[off + 6] << 8);
-        if (Math.abs(mx - q.x) <= 3 && Math.abs(my - q.y) <= 3
-            && Math.abs((mz + FUEL_Z_OFFSET) - q.z) <= 4) ok++;
+        const res = fuelProbeResult(a, base + q.id * 7, q, 3);
+        if (res === 'invalid') continue;
         total++;
+        if (res === 'absent') { ok++; continue; }
+        if (res === 'present') { ok++; presentMatches++; }
       }
-      if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)) {
+      if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)
+          && (presentMatches >= 1 || probes.every(q => q.count === 0))) {
         fuelAddr = base;
         fuelSource = 'packet';
         fuelVerified = true;
@@ -915,26 +940,36 @@ function validFuelRecord(a, off) {
   return z >= 30000 && z <= 40000;
 }
 
+function fuelProbeResult(a, off, p, tol) {
+  if (!validFuelRecord(a, off)) return 'invalid';
+  if (a[off] === 0) return p.count === 0 ? 'absent' : 'mismatch';
+  const mx = a[off + 1] | (a[off + 2] << 8);
+  const my = a[off + 3] | (a[off + 4] << 8);
+  const mz = a[off + 5] | (a[off + 6] << 8);
+  if (Math.abs(mx - p.x) <= tol && Math.abs(my - p.y) <= tol
+      && Math.abs((mz + FUEL_Z_OFFSET) - p.z) <= tol + 1) return 'present';
+  return 'mismatch';
+}
+
 function verifyFuelBase() {
   if (!fuelAddr || !fuelPacket.size || !mem) return false;
   const a = u8();
   const probes = [...fuelPacket.values()]
     .sort((a, b) => b.seen - a.seen)
     .slice(0, 5);
-  let checked = 0, ok = 0;
+  let checked = 0, ok = 0, presentChecked = 0, presentOk = 0;
   for (const p of probes) {
-    const off = fuelAddr + p.id * 7;
-    if (!validFuelRecord(a, off)) return false;
-    if (a[off] === 0 || p.count === 0) { ok++; checked++; continue; }
-    const mx = a[off + 1] | (a[off + 2] << 8);
-    const my = a[off + 3] | (a[off + 4] << 8);
-    const mz = a[off + 5] | (a[off + 6] << 8);
-    if (Math.abs(mx - p.x) <= 3 && Math.abs(my - p.y) <= 3
-        && Math.abs((mz + FUEL_Z_OFFSET) - p.z) <= 4) ok++;
+    const res = fuelProbeResult(a, fuelAddr + p.id * 7, p, 3);
+    if (res === 'invalid') return false;
     checked++;
+    if (res === 'absent') { ok++; continue; }
+    presentChecked++;
+    if (res === 'present') { ok++; presentOk++; }
   }
   const need = Math.min(3, probes.length);
-  return checked >= need && ok >= Math.ceil(checked * 0.6);
+  if (checked < need) return false;
+  if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
+  return true;
 }
 
 function scanFuelRun() {
@@ -950,18 +985,13 @@ function scanFuelRun() {
     if (probes.length < count) return 0;
     const lim = a.length - count * 7;
     for (let i = 0x10000; i <= lim; i++) {
-      let ok = true;
+      let ok = true, presentMatches = 0;
       for (const p of probes) {
-        const off = i + p.id * 7;
-        if (!validFuelRecord(a, off)) { ok = false; break; }
-        if (a[off] === 0 || p.count === 0) continue;
-        const mx = a[off + 1] | (a[off + 2] << 8);
-        const my = a[off + 3] | (a[off + 4] << 8);
-        const mz = a[off + 5] | (a[off + 6] << 8);
-        if (Math.abs(mx - p.x) > 3 || Math.abs(my - p.y) > 3
-            || Math.abs((mz + FUEL_Z_OFFSET) - p.z) > 4) { ok = false; break; }
+        const res = fuelProbeResult(a, i + p.id * 7, p, 3);
+        if (res === 'invalid' || res === 'mismatch') { ok = false; break; }
+        if (res === 'present') presentMatches++;
       }
-      if (ok) {
+      if (ok && (presentMatches >= 1 || probes.every(p => p.count === 0))) {
         fuelAddr = i;
         fuelSource = 'scan';
         fuelVerified = true;
@@ -990,18 +1020,14 @@ function scanFuelRun() {
       // Correlate with recent packet records so an older copy elsewhere in
       // the heap is not accepted as the live fuel array.
       const probes = [...fuelPacket.values()].filter(r => r.id < count).slice(-5);
-      let matched = 0;
+      let matched = 0, presentMatches = 0;
       for (const p of probes) {
-        const off = i + p.id * 7;
-        if (!validFuelRecord(a, off)) continue;
-        if (a[off] === 0 || p.count === 0) { matched++; continue; }
-        const mx = a[off + 1] | (a[off + 2] << 8);
-        const my = a[off + 3] | (a[off + 4] << 8);
-        const mz = a[off + 5] | (a[off + 6] << 8);
-        if (Math.abs(mx - p.x) <= 6 && Math.abs(my - p.y) <= 6
-            && Math.abs((mz + FUEL_Z_OFFSET) - p.z) <= 8) matched++;
+        const res = fuelProbeResult(a, i + p.id * 7, p, 6);
+        if (res === 'absent') matched++;
+        else if (res === 'present') { matched++; presentMatches++; }
       }
       if (probes.length && matched < Math.ceil(probes.length * 0.6)) continue;
+      if (probes.length && presentMatches === 0 && !probes.every(p => p.count === 0)) continue;
       fuelAddr = i;
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
@@ -1024,10 +1050,12 @@ function findFuelArray() {
     const b = locateFuelFromPacket();
     if (b) return b;
   }
+  const scanStart = Date.now();
   const scanned = scanFuelRun();
-  // A synchronous heap scan blocks 0x41 processing; treat the scan time as
-  // liveness so the next state tick does not falsely report a stalled clock.
-  last41At = Date.now();
+  const spent = Date.now() - scanStart;
+  // Compensate only the time actually spent in the synchronous scan; do not
+  // mask a genuine loss of 0x41.
+  if (spent > 100 && last41At) last41At += spent;
   return scanned;
 }
 
