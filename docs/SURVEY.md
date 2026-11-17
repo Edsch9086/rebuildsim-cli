@@ -558,6 +558,19 @@ exit=6
 The real engine's reader now runs on a background thread, so `Engine` callers
 can use `next_event_timeout`/`next_state_timeout` instead of blocking forever.
 
+Lobby reconnect test with `--restart-on-exit --max-restarts 2` against a fake
+engine that drops the room socket:
+
+```
+restarting engine after disconnect (1/2) in 2s...
+restarting engine after disconnect (2/2) in 2s...
+restart limit (2) reached
+exit=6
+```
+
+A restart is only attempted in join mode, before the match starts, and not for
+build/protocol failures.
+
 ### Binary fuel + build pin
 
 `node engine/binary_test.cjs`:
