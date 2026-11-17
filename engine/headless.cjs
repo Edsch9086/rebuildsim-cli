@@ -431,7 +431,7 @@ function noteSeatPresence(ours) {
     if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
     return;
   }
-  if (!seated || (flow.match && seated)) return;
+  if (!seated || (matchStarted && seated)) return;
   if (seatMissingSince) return;
   seatMissingSince = Date.now();
   seatDemoteTimer = setTimeout(() => {
@@ -460,7 +460,7 @@ function clearRoomIdentity() {
 function applyRoom06(buf) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
-    if (flow.match && roomSeats.length) {
+    if (matchStarted && roomSeats.length) {
       log('room state parse produced no seats during a match; keeping last good seat list');
       return roomSeats;
     }
@@ -470,7 +470,7 @@ function applyRoom06(buf) {
     lastRoom06 = null;
     return roomSeats;
   }
-  if (flow.match && roomSeats.length) {
+  if (matchStarted && roomSeats.length) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (parsed.seats.length < roomSeats.length || (oursBefore && !oursNow)) {
@@ -512,7 +512,7 @@ function applyRoom06(buf) {
   }
   if (flow.joined) {
     const ours = roomSeats.some(s => s.name === OPT.username);
-    if (flow.match && seated && !ours) {
+    if (matchStarted && seated && !ours) {
       log('ignoring apparent seat loss during a match');
       return roomSeats;
     }

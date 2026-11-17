@@ -41,7 +41,7 @@ Flags:
 --code <CODE>       join a room
 --username <NAME>   display name (1-10 ASCII; the game truncates longer names)
 --create            test-only: create a room
---start             test-only: if host, start the match (seats auto-ready on join)
+--start             test-only: if host, ready and start the match
 --spawn <S>         reserved; ignored (infer spawn from first pose)
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)
@@ -180,8 +180,9 @@ dependency because the headless engine itself does not need it.
   for practice/test matches.
 - `--spawn` is deferred; infer the spawn from `me`.
 - The CLI is normally a **joiner**: a human spectator hosts, bots join and
-  auto-ready, and the human starts the match. `--create`/`--start` are for
-  testing only.
+  auto-ready, and the human starts the match. The engine checks the 0x06 ready
+  byte and only clicks READY if the seat is not ready (rematch), so it never
+  toggles a ready seat off. `--create`/`--start` are for testing only.
 - Fuel count is dynamic (1..~4300). The engine locates the memory array by
   matching recent `0x42` packet records; it does not assume 456.
 - One engine = one wasm instance + two WebSocket connections (room list + room).

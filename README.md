@@ -69,8 +69,11 @@ node headless.cjs --code <LOBBY> --username MyBot
 ```
 
 The engine prints JSON lines on stdout and accepts JSON commands on stdin.
-Normal bots only join (`--code`); a human host starts the match. `--create` /
-`--start` remain for local testing. `--binary` switches to framed stdout with
+Normal bots only join (`--code`); a human host starts the match. Joining
+auto-readies a seat; the engine only clicks READY when the 0x06 ready bit says
+the seat is not ready, so it never toggles a ready seat off. A host engine
+readies its own seat before `--start` clicks START. `--create` / `--start`
+remain for local testing. `--binary` switches to framed stdout with
 packed fuel records (the Rust CLI uses this by default). `--expect-build <hash>`
 checks the cached build hash; startup also verifies asset hashes and fails with
 exit 3 if the live server build differs.
