@@ -314,7 +314,7 @@ const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.en
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null, roomSocketId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
-let startClicks = 0;
+let startClicks = 0, resultsClickScheduled = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -399,6 +399,7 @@ function resetMatchState() {
   readyClicked = false;
   startClicked = false;
   startClicks = 0;
+  resultsClickScheduled = false;
   lastReadyClickAt = 0;
   matchWasActive = false;
   matchStartedAt = 0;
@@ -1788,6 +1789,16 @@ setInterval(() => {
     flow.match = false;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
+    if (!resultsClickScheduled) {
+      resultsClickScheduled = true;
+      // Results screen: BACK TO THE ROOM is centered at (365, 688).
+      uiLater(() => {
+        if (!flow.match) { log('results: back to room'); globalThis.__ctl.click(365, 688); }
+      }, 3500);
+      uiLater(() => {
+        if (!flow.match) { log('results: retry back to room'); globalThis.__ctl.click(365, 688); }
+      }, 7500);
+    }
   }
 }, Math.max(1, Math.floor(1000 / OPT.emitHz)));
 
