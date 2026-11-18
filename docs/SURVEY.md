@@ -474,6 +474,9 @@ A later run after the rematch roster-reset change also produced
 A final run after auto-clock gating, room-return packet clearing, and the
 end-state stop produced: `MATCH 2`, room seats 1 at match start, exactly one
 final `end` state, `meMissing 0`, and `unknownFrame 0` across 377 states.
+The final endgame-fuel run produced the same result with `fuelOk 377/377`,
+confirming the exhaustive all-absent fuel verification does not disturb normal
+play or the rematch.
 
 ## 12. Verification log
 
