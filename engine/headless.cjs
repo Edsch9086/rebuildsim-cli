@@ -355,7 +355,7 @@ let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
-let readyClickPending = false;
+let readyClickPending = false, readyClickTimer = null;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -444,6 +444,7 @@ function resetMatchState(clearRoster = false) {
   resultsPending = false;
   lastReadyClickAt = 0;
   readyClickPending = false;
+  readyClickTimer = null;
   shrinkKey = null;
   seatsKey = '';
   matchWasActive = false;
@@ -567,6 +568,11 @@ function applyRoom06(buf) {
       readyClicked = false;
       lastReadyClickAt = 0;
       readyClickPending = false;
+      if (readyClickTimer) {
+        clearTimeout(readyClickTimer);
+        uiTimers.delete(readyClickTimer);
+        readyClickTimer = null;
+      }
     }
   }
   if (roomSeats.length) {
@@ -1596,7 +1602,8 @@ function readyIfNeeded(force = false) {
   if (!force && Date.now() - lastReadyClickAt < 4000) return;
   readyClickPending = true;
   const scheduledAt = Date.now();
-  uiLater(() => {
+  readyClickTimer = uiLater(() => {
+    readyClickTimer = null;
     readyClickPending = false;
     if (lastReadyClickAt > scheduledAt) return;
     const cur = roomSeats.find(s => s.name === OPT.username);
