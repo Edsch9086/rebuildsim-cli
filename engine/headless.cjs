@@ -358,7 +358,7 @@ let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let readyClickPending = false, readyClickTimer = null, resultsAt = 0;
-let roomAfterEnd = false;
+let lastRoomViewAt = 0;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -448,7 +448,7 @@ function resetMatchState(clearRoster = false) {
   startClicks = 0;
   resultsClickScheduled = false;
   resultsPending = false;
-  roomAfterEnd = false;
+  lastRoomViewAt = 0;
   lastReadyClickAt = 0;
   readyClickPending = false;
   readyClickTimer = null;
@@ -1238,16 +1238,7 @@ function scanFuelRun() {
 
 function findFuelArray() {
   if (!mem) return 0;
-  if (![...fuelPacket.values()].some(r => r.count > 0)) {
-    // All known fuel is consumed; keep a previously verified base rather than
-    // locking onto an arbitrary zero region.
-    if (fuelAddr && !verifyFuelBase()) {
-      fuelAddr = 0;
-      fuelSource = null;
-      fuelVerified = false;
-    }
-    return fuelAddr;
-  }
+  if (![...fuelPacket.values()].some(r => r.count > 0)) return 0;
   if (fuelAddr) {
     if (verifyFuelBase()) return fuelAddr;
     log('fuel base moved; relocating');
@@ -1835,6 +1826,7 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
+      if (flow.match || matchWasActive) lastRoomViewAt = Date.now();
           // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
@@ -1852,10 +1844,9 @@ function onTrack(name, params) {
         lastRoom06 = null;
         emitRoom();
       } else if (clockEnded) {
-        // A human may click BACK before the next state tick. Remember it and
-        // let the end tick emit the final state, then return to the room
-        // instead of scheduling result-screen clicks.
-        roomAfterEnd = true;
+        // A human may click BACK before the next state tick. The timestamped
+        // room latch lets the end tick emit the final state, then return to
+        // the room instead of scheduling result-screen clicks.
         log('room view at the final buzzer; deferring to the end tick');
       } else if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
@@ -2078,7 +2069,8 @@ setInterval(() => {
       fuelVerified = false;
       const anyPresent = [...fuelPacket.values()].some(r => r.count > 0);
       const allZero = fuelBaseAllZero();
-      if (allZero && anyPresent) {
+      const nearEnd = lastMatchTime != null && lastMatchTime <= 30;
+      if (allZero && anyPresent && nearEnd) {
         // The 0x42 sweep lags the last consumption by up to ~3 s. A zeroed
         // base with stale present packets is the normal endgame transition;
         // wait for one full sweep before deciding the base moved.
@@ -2165,17 +2157,21 @@ setInterval(() => {
     seatMissingSince = 0;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
-    if (roomAfterEnd) {
+    const earlyRoom = lastRoomViewAt && Date.now() - lastRoomViewAt < 2500;
+    if (earlyRoom) {
       log('room view already seen; returning without results clicks');
+      const savedRoom06 = lastRoom06;
       resetMatchState(false);
-      lastRoom06 = null;
-      emitRoom();
-      // The normal /room handler could not arm the host start because the end
-      // tick had not run yet; arm it now that the room state is current.
-      if (flow.joined && host && OPT.start) {
+      lastRoom06 = savedRoom06;
+      if (lastRoom06) {
+        // Restore the ready flags from the room packet that arrived before the
+        // end tick; a join-only bot otherwise has no fresh 0x06 to ready from.
+        applyRoom06(lastRoom06);
+      } else if (flow.joined && host && OPT.start) {
         startClicked = true;
         uiLater(() => clickStartWhenReady(0), 1800);
       }
+      emitRoom();
     } else if (!resultsClickScheduled) {
       resultsClickScheduled = true;
       resultsPending = true;
