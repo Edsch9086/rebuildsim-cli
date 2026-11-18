@@ -555,6 +555,9 @@ function applyRoom06(buf) {
   const ourSeatChanged = (!!prevOurs !== !!nextOurs)
     || (prevOurs && nextOurs && (prevOurs.team_flag !== nextOurs.team_flag
       || prevOurs.robot_id !== nextOurs.robot_id || prevOurs.seat !== nextOurs.seat));
+  const ourIdentityChanged = (!prevOurs && !!nextOurs)
+    || (prevOurs && nextOurs && (prevOurs.team_flag !== nextOurs.team_flag
+      || prevOurs.robot_id !== nextOurs.robot_id));
   const rosterChanged = roomSeats.length !== parsed.seats.length
     || roomSeats.some(old => {
       const cur = parsed.seats.find(s => s.name === old.name);
@@ -586,7 +589,7 @@ function applyRoom06(buf) {
         return false;
       }
     } else if (parsed.seats.length < roomSeats.length) {
-      if (ourSeatChanged && nextOurs) {
+      if (ourIdentityChanged && nextOurs) {
         log('our seat/team changed; accepting the smaller snapshot');
         shrinkKey = null;
       } else {
@@ -975,7 +978,7 @@ function parseFuelPacket(buf) {
         fuelLocateFails = 0;
       } else {
         fuelLocateFails++;
-        lastFuelLocate = now + (fuelLocateFails >= 4 ? 2000 : 500);
+        lastFuelLocate = Date.now() + (fuelLocateFails >= 4 ? 2000 : 500);
       }
     }
   }
@@ -1053,9 +1056,11 @@ function fuelProbeResult(a, off, p, tol) {
 function verifyFuelBase() {
   if (!fuelAddr || !fuelPacket.size || !mem) return false;
   const a = u8();
-  const probes = [...fuelPacket.values()]
-    .sort((a, b) => b.seen - a.seen)
-    .slice(0, 5);
+  const allRecords = [...fuelPacket.values()].sort((a, b) => b.seen - a.seen);
+  const presentRecords = allRecords.filter(r => r.count > 0);
+  const probes = presentRecords.length
+    ? [...presentRecords.slice(0, 3), ...allRecords.filter(r => r.count === 0).slice(0, 2)]
+    : allRecords.slice(0, 5);
   let checked = 0, ok = 0, presentChecked = 0, presentOk = 0;
   for (const p of probes) {
     const res = fuelProbeResult(a, fuelAddr + p.id * 7, p, 3);
@@ -1131,8 +1136,8 @@ function scanFuelRun() {
       if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
     if (!ok) continue;
+    let anchorOk = false;
     if (packetHasPresent) {
-      let anchorOk = false;
       for (const anchor of presentPackets.slice(0, 3)) {
         if (fuelProbeResult(a, i + anchor.id * 7, anchor, 6) === 'present') {
           anchorOk = true;
@@ -1158,7 +1163,7 @@ function scanFuelRun() {
         else if (res === 'present') { matched++; presentMatches++; }
       }
       if (probes.length && matched < Math.ceil(probes.length * 0.6)) continue;
-      if (presentProbes.length && presentMatches === 0) continue;
+      if (presentProbes.length && presentMatches === 0 && !anchorOk) continue;
       fuelAddr = i;
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
