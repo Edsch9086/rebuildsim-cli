@@ -466,6 +466,9 @@ MATCH 2 countdown
 RESULT matches 2 states 384 ends 8 rooms 10
 ```
 
+A later run after the rematch roster-reset change also produced
+`MATCH 2` about five seconds after the results return (`matches 2`, `rematch=0`).
+
 ## 12. Verification log
 
 These are the reproducible checks used for the current build (`b654373`).
