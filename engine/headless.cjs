@@ -375,7 +375,7 @@ let scores = { red: 0, blue: 0 };
 let autoScores = { red: 0, blue: 0 };
 let protocolVersion = null;
 let lastCountdown = null;
-let clockStarted = false;
+let clockStarted = false, sawAutoClock = false;
 let matchEndTimer = null;
 let ourAllianceCache = null;
 
@@ -437,6 +437,7 @@ function resetMatchState(clearRoster = false) {
   matchStarted = false;
   flow.match = false;
   clockStarted = false;
+  sawAutoClock = false;
   matchEndScheduled = false;
   if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
   readyClicked = false;
@@ -466,6 +467,8 @@ function resetMatchState(clearRoster = false) {
   lastFuelScan = 0;
   lastFuelVerify = 0;
   lastFuelLocate = 0;
+  fuelLocateFails = 0;
+  fuelScanCursor = 0x10000;
   fuelSource = null;
   fuelVerified = false;
   fuelPacket.clear();
@@ -559,24 +562,6 @@ function applyRoom06(buf) {
         || cur.robot_id !== old.robot_id || cur.seat !== old.seat;
     });
   const playStarted = matchStarted && clockStarted;
-  if (rosterChanged && !playStarted) {
-    // A pre-clock seat/robot/slot move invalidates cached poses; only our own
-    // seat change should reset the READY throttle.
-    log('room roster/slot changed; clearing pose caches');
-    poseCache.clear();
-    poseMissUntil.clear();
-    lastPose.clear();
-    if (ourSeatChanged) {
-      readyClicked = false;
-      lastReadyClickAt = 0;
-      readyClickPending = false;
-      if (readyClickTimer) {
-        clearTimeout(readyClickTimer);
-        uiTimers.delete(readyClickTimer);
-        readyClickTimer = null;
-      }
-    }
-  }
   if (roomSeats.length) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
@@ -601,20 +586,43 @@ function applyRoom06(buf) {
         return false;
       }
     } else if (parsed.seats.length < roomSeats.length) {
-      // Lobby shrink: require the same smaller snapshot twice so one partial
-      // packet cannot drop teammates.
-      const key = JSON.stringify(parsed.seats.map(s => s.name));
-      if (shrinkKey !== key) {
-        shrinkKey = key;
-        log('room snapshot shrank; waiting for confirmation');
-        return false;
+      if (ourSeatChanged && nextOurs) {
+        log('our seat/team changed; accepting the smaller snapshot');
+        shrinkKey = null;
+      } else {
+        // Lobby shrink: require the same smaller snapshot twice so one partial
+        // packet cannot drop teammates.
+        const key = JSON.stringify(parsed.seats.map(s => s.name));
+        if (shrinkKey !== key) {
+          shrinkKey = key;
+          log('room snapshot shrank; waiting for confirmation');
+          return false;
+        }
+        shrinkKey = null;
       }
-      shrinkKey = null;
     } else {
       shrinkKey = null;
     }
   }
   roomSeats = parsed.seats;
+  if (rosterChanged && !playStarted) {
+    // A pre-clock seat/robot/slot move invalidates cached poses; only our own
+    // seat change should reset the READY throttle.
+    log('room roster/slot changed; clearing pose caches');
+    poseCache.clear();
+    poseMissUntil.clear();
+    lastPose.clear();
+    if (ourSeatChanged) {
+      readyClicked = false;
+      lastReadyClickAt = 0;
+      readyClickPending = false;
+      if (readyClickTimer) {
+        clearTimeout(readyClickTimer);
+        uiTimers.delete(readyClickTimer);
+        readyClickTimer = null;
+      }
+    }
+  }
   if (roomSeats.some(s => s.name === OPT.username)) noteSeatPresence(true);
   if (roomSeats.length) {
     const names = roomSeats.map(s => s.name);
@@ -692,9 +700,17 @@ function parse41(buf) {
   }
   if (buf.length >= 14) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
-    lastMatchTime = dv.getFloat32(10, true);
-    if (!Number.isFinite(lastMatchTime)) lastMatchTime = null;
-    if (lastMatchTime > 0) clockStarted = true;
+    let t = dv.getFloat32(10, true);
+    if (!Number.isFinite(t)) t = null;
+    if (t != null && (sawAutoClock || t > 143.0 || t <= 0.05)) {
+      lastMatchTime = t;
+      if (t > 143.0) sawAutoClock = true;
+      if (t > 0.05) clockStarted = true;
+    } else if (t != null) {
+      // A stale positive teleop clock from the previous match must not make
+      // the new countdown look like a live match.
+      log('ignoring stale pre-auto clock', t);
+    }
   }
 }
 
@@ -911,6 +927,8 @@ let fuelVerified = false;
 let fuelVerifyFails = 0;
 const FUEL_Z_OFFSET = Math.round(0.045 * 4096);
 let lastFuelLocate = 0;
+let fuelLocateFails = 0;
+let fuelScanCursor = 0x10000;
 const fuelPacket = new Map();
 let initialFuelPacket = null;
 
@@ -920,6 +938,8 @@ function parseFuelPacket(buf) {
   const n = buf.readUInt16LE(7);
   if (total !== fuelPacketCount) {
     fuelPacketCount = total;
+    fuelScanCursor = 0x10000;
+    fuelLocateFails = 0;
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
@@ -951,7 +971,12 @@ function parseFuelPacket(buf) {
     const now = Date.now();
     if (now - lastFuelLocate > 250) {
       lastFuelLocate = now;
-      if (!locateFuelFromPacket()) lastFuelLocate = now + 2000;
+      if (locateFuelFromPacket()) {
+        fuelLocateFails = 0;
+      } else {
+        fuelLocateFails++;
+        lastFuelLocate = now + (fuelLocateFails >= 4 ? 2000 : 500);
+      }
     }
   }
 }
@@ -1015,7 +1040,8 @@ function validFuelRecord(a, off) {
 
 function fuelProbeResult(a, off, p, tol) {
   if (!validFuelRecord(a, off)) return 'invalid';
-  if (a[off] === 0) return p.count === 0 ? 'absent' : 'mismatch';
+  if (p.count === 0) return a[off] === 0 ? 'absent' : 'mismatch';
+  if (a[off] === 0) return 'mismatch';
   const mx = a[off + 1] | (a[off + 2] << 8);
   const my = a[off + 3] | (a[off + 4] << 8);
   const mz = a[off + 5] | (a[off + 6] << 8);
@@ -1027,9 +1053,7 @@ function fuelProbeResult(a, off, p, tol) {
 function verifyFuelBase() {
   if (!fuelAddr || !fuelPacket.size || !mem) return false;
   const a = u8();
-  const all = [...fuelPacket.values()];
-  const present = all.filter(r => r.count > 0);
-  const probes = (present.length ? present : all)
+  const probes = [...fuelPacket.values()]
     .sort((a, b) => b.seen - a.seen)
     .slice(0, 5);
   let checked = 0, ok = 0, presentChecked = 0, presentOk = 0;
@@ -1044,7 +1068,7 @@ function verifyFuelBase() {
   const need = Math.min(3, probes.length);
   if (checked < need) return false;
   if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
-  return present.length === 0;
+  return true;
 }
 
 function scanFuelRun() {
@@ -1064,9 +1088,12 @@ function scanFuelRun() {
     const probes = [...fuelPacket.values()].filter(r => r.id < count);
     if (probes.length < count) return 0;
     const lim = a.length - count * 7;
-    for (let i = 0x10000; i <= lim; i++) {
+    const start = (fuelScanCursor >= 0x10000 && fuelScanCursor <= lim) ? fuelScanCursor : 0x10000;
+    for (let i = start; i <= lim; i++) {
       if ((i & 0xfff) === 0 && Date.now() > deadline) {
-        log('tiny fuel scan timed out'); return 0;
+        fuelScanCursor = i;
+        log('tiny fuel scan timed out; resuming at', '0x' + i.toString(16));
+        return 0;
       }
       let ok = true, presentMatches = 0;
       for (const p of probes) {
@@ -1078,10 +1105,12 @@ function scanFuelRun() {
         fuelAddr = i;
         fuelSource = 'scan';
         fuelVerified = true;
+        fuelScanCursor = 0x10000;
         log('fuel array (tiny scan) at', '0x' + i.toString(16), 'count', count);
         return i;
       }
     }
+    fuelScanCursor = 0x10000;
     return 0;
   }
   const probe = Math.min(count, 64);
@@ -1090,9 +1119,12 @@ function scanFuelRun() {
     ? [...new Set([count - 1, Math.floor(count / 2), Math.floor(count / 3), Math.floor(count * 2 / 3), 8, 16, 32, 63])]
       .filter(j => j >= probe && j < count)
     : [];
-  for (let i = 0x10000; i <= lim; i++) {
+  const start = (fuelScanCursor >= 0x10000 && fuelScanCursor <= lim) ? fuelScanCursor : 0x10000;
+  for (let i = start; i <= lim; i++) {
     if ((i & 0xfff) === 0 && Date.now() > deadline) {
-      log('fuel scan timed out'); return 0;
+      fuelScanCursor = i;
+      log('fuel scan timed out; resuming at', '0x' + i.toString(16));
+      return 0;
     }
     let ok = true;
     for (let j = 0; j < probe; j++) {
@@ -1100,8 +1132,14 @@ function scanFuelRun() {
     }
     if (!ok) continue;
     if (packetHasPresent) {
-      const anchor = presentPackets[0];
-      if (fuelProbeResult(a, i + anchor.id * 7, anchor, 6) !== 'present') continue;
+      let anchorOk = false;
+      for (const anchor of presentPackets.slice(0, 3)) {
+        if (fuelProbeResult(a, i + anchor.id * 7, anchor, 6) === 'present') {
+          anchorOk = true;
+          break;
+        }
+      }
+      if (!anchorOk) continue;
     }
     for (const j of spread) {
       if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
@@ -1109,10 +1147,10 @@ function scanFuelRun() {
     if (ok) {
       // Correlate with recent packet records so an older copy elsewhere in
       // the heap is not accepted as the live fuel array.
-      const allProbes = [...fuelPacket.values()].filter(r => r.id < count);
+      const allProbes = [...fuelPacket.values()].filter(r => r.id < count)
+        .sort((a, b) => b.seen - a.seen);
+      const probes = allProbes.slice(0, 5);
       const presentProbes = allProbes.filter(r => r.count > 0);
-      const probes = (presentProbes.length ? presentProbes : allProbes)
-        .sort((a, b) => b.seen - a.seen).slice(0, 5);
       let matched = 0, presentMatches = 0;
       for (const p of probes) {
         const res = fuelProbeResult(a, i + p.id * 7, p, 6);
@@ -1124,10 +1162,12 @@ function scanFuelRun() {
       fuelAddr = i;
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
+      fuelScanCursor = 0x10000;
       log('fuel array (scan) at', '0x' + i.toString(16), 'count', count);
       return i;
     }
   }
+  fuelScanCursor = 0x10000;
   return 0;
 }
 
@@ -1139,11 +1179,25 @@ function findFuelArray() {
     fuelAddr = 0;
     fuelSource = null;
   }
-  if (fuelPacket.size) {
+  if (fuelPacket.size && Date.now() - lastFuelLocate >= 0) {
+    lastFuelLocate = Date.now();
     const b = locateFuelFromPacket();
-    if (b) return b;
+    if (b) {
+      fuelLocateFails = 0;
+      return b;
+    }
+    fuelLocateFails++;
+    lastFuelLocate = Date.now() + (fuelLocateFails >= 4 ? 2000 : 500);
   }
   return scanFuelRun();
+}
+
+function maybeScanFuel() {
+  if (!matchStarted || !mem || fuelAddr) return;
+  const now = Date.now();
+  if (now - lastFuelScan <= 2000) return;
+  lastFuelScan = now;
+  if (!findFuelArray()) lastFuelScan = Date.now() + 2000;
 }
 
 function readFuel() {
@@ -1700,7 +1754,7 @@ function onTrack(name, params) {
       const matchLive = starting || (flow.match && clockStarted && lastMatchTime != null
         && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500);
       if (!matchLive && (flow.match || matchWasActive)) {
-        resetMatchState(true);
+        resetMatchState(false);
         emitRoom();
       } else if (matchLive && !roomResetTimer) {
         roomResetTimer = setTimeout(() => {
@@ -1710,7 +1764,7 @@ function onTrack(name, params) {
           if (!stillStarting && flow.match
               && (!last41At || Date.now() - last41At >= 2500)) {
             log('room screen without clock updates; resetting stale match');
-            resetMatchState(true);
+            resetMatchState(false);
             emitRoom();
           }
         }, 1800);
@@ -1784,7 +1838,7 @@ function onTrack(name, params) {
     if (host && OPT.fuel && !fuelApplied) {
       fuelApplied = true;
       // Room settings > Rules > Fuel count. 720p coordinates. uiBusy starts
-      // when this dialog opens; readyIfNeeded(true) retries after fuel setup.
+      // when this dialog opens; readyIfNeeded retries after fuel setup.
       const raw = String(OPT.fuel).replace('%', '').toLowerCase();
       let clicks = 0, dir = 1;
       if (raw === 'max' || raw === 'full') { log('--fuel max is not supported; use an explicit percentage'); clicks = 0; }
@@ -1800,7 +1854,7 @@ function onTrack(name, params) {
         uiLater(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
       }
       uiLater(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
-      uiLater(() => { uiBusy = false; readyIfNeeded(true); readyAndStart(); }, 1500 + clicks * 250 + 1000);
+      uiLater(() => { uiBusy = false; readyIfNeeded(); readyAndStart(); }, 1500 + clicks * 250 + 1000);
       log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
     } else {
       readyAndStart();
@@ -1866,13 +1920,7 @@ const titleTimer = setInterval(() => {
 }, 2000);
 
 // locate the fuel array once the match starts (and retry if the heap moves)
-setInterval(() => {
-  if (!matchStarted || !mem) return;
-  if (!fuelAddr) {
-    const now = Date.now();
-    if (now - lastFuelScan > 2000) { lastFuelScan = now; findFuelArray(); }
-  }
-}, 2000);
+setInterval(maybeScanFuel, 2000);
 
 // state emitter
 let seq = 0;
@@ -1909,12 +1957,7 @@ setInterval(() => {
       }
     }
   }
-  if (!fuelAddr) {
-    if (fuelNow - lastFuelScan > 2000) {
-      lastFuelScan = fuelNow;
-      if (!findFuelArray()) lastFuelScan = fuelNow + 2000;
-    }
-  }
+  if (!fuelAddr) maybeScanFuel();
   const robots = readRobots();
   const fuel = readFuel();
   const match = classifyMatch(lastMatchTime, lastCountdown, clockStarted);
@@ -2059,7 +2102,7 @@ rl.on('line', (line) => {
   else if (cmd.type === 'ready') {
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
     if (ourSeat && ourSeat.ready === false && !matchStarted && !uiBusy) {
-      readyIfNeeded(true);
+      readyIfNeeded();
     }
   }
   else if (cmd.type === 'start') clickStartWhenReady(0, true);
