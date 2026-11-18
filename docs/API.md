@@ -329,7 +329,7 @@ The CLI adds several watchdogs on top of the engine:
 - Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
   the socket that delivered `0x06` closes. The CLI exits `6` in that case
   unless `--allow-ws-close` is passed.
-- If `0x41` stops for 3 s during a live match (or no positive clock arrives
+- If `0x41` stops for 4 s during a live match (or no positive clock arrives
   within 15 s of match start), the engine emits `match_clock_stalled`; the CLI
   exits `5` immediately (or via the state timeout if states simply stop).
 - A room update that omits the driver seat is debounced for 2.5 s in the lobby
@@ -365,12 +365,18 @@ mid-match. Build/protocol failures (exit 3/4) are not retried.
 ## Build pinning
 
 `engine/prepare.mjs` writes `cache/build.json` with the downloaded `BUILD` hash.
+It refuses to replace the pinned build with a different live build unless
+`RB_ALLOW_BUILD_UPDATE=1` is set, and it verifies downloaded hashes against the
+pin before installing them. Use `RB_BUILD=<pinned-hash> node prepare.mjs` to
+restore pinned assets; update `engine/trusted_build.json` deliberately after
+verifying a new release.
 At startup the engine fetches the page and compares the live `BUILD`:
 
 - mismatch → emits `{"type":"error","error":"build_drift",...}` and exits `3`;
 - `--expect-build <hash>` checks the cached assets before connecting and exits
   `3` on mismatch; asset SHA-256 hashes from `build.json` are verified too;
-- `--no-build-check` skips the live fetch (offline/local debugging).
+- `--no-build-check` skips the trusted pin and live fetch (offline/local
+  debugging); `build.json` asset hashes are still verified.
 
 The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 (`exit 4`).

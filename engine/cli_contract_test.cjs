@@ -33,6 +33,9 @@ const scripts = {
     after(300, 'console.log(JSON.stringify({type:"error",error:"match_clock_stalled"}));')),
   notready: fake('notready', ready + after(100, room('NREA1', true)) +
     after(300, 'console.log(JSON.stringify({type:"error",error:"not_all_ready",detail:"RedB"}));')),
+  silent: fake('silent', ready + after(100, room('SILE1', true, true)) +
+    after(200, 'console.log(JSON.stringify({type:"match",phase:"auto",substage:"auto",time:160,seats:[]}));') +
+    after(300, 'console.log(JSON.stringify({type:"state",seq:1,t:0,phase:"auto",substage:"auto",time:160,robots:[],fuel:[]}));')),
   transient: fake('transient', ready + after(100, room('TRAN1', true)) +
     after(300, room('TRAN1', false)) + after(800, room('TRAN1', true))),
 };
@@ -69,6 +72,7 @@ function check(name, result, wantCode, wantAlive = false, wantErr = '') {
   check('join timeout exits 5', await run(scripts.noroom, ['--code', 'NORM1', '--join-timeout', '2']), 5);
   check('stalled clock exits 5', await run(scripts.stall, ['--code', 'STAL1', '--state-timeout', '30']), 5, false, 'stalled match clock');
   check('not-all-ready exits 5', await run(scripts.notready, ['--code', 'NREA1']), 5);
+  check('state timeout exits 5', await run(scripts.silent, ['--code', 'SILE1', '--state-timeout', '2']), 5, false, 'state timeout');
   check('transient seat loss stays alive', await run(scripts.transient, ['--code', 'TRAN1'], 3000), null, true);
   if (failures) {
     console.error(`${failures} CLI contract test(s) failed`);

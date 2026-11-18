@@ -16,9 +16,18 @@ fs.mkdirSync(cache, { recursive: true });
 
 const base = process.env.RB_BASE_URL || 'https://rebuildsim.com/';
 let trusted = null;
-try {
-  trusted = JSON.parse(fs.readFileSync(path.join(__dirname, 'trusted_build.json'), 'utf8'));
-} catch {}
+const trustedPath = path.join(__dirname, 'trusted_build.json');
+if (fs.existsSync(trustedPath)) {
+  try {
+    trusted = JSON.parse(fs.readFileSync(trustedPath, 'utf8'));
+  } catch (e) {
+    console.error('trusted_build.json is unreadable:', String(e));
+    process.exit(1);
+  }
+} else if (!process.env.RB_ALLOW_BUILD_UPDATE) {
+  console.error('trusted_build.json is missing; set RB_ALLOW_BUILD_UPDATE=1 to fetch unpinned');
+  process.exit(1);
+}
 
 let build = process.env.RB_BUILD || null;
 if (!build) {
@@ -58,18 +67,13 @@ function sha(buf) {
 const js = await get('index.js');
 const wasm = await get('index.wasm');
 
-for (const [file, buf] of [['index.js', js], ['index.wasm', wasm]]) {
-  const tmp = path.join(cache, `${file}.tmp`);
-  fs.writeFileSync(tmp, buf);
-  fs.renameSync(tmp, path.join(cache, file));
-  console.error('wrote', file, buf.length);
-}
-
 const metadata = {
   build,
   fetched: new Date().toISOString(),
   files: { 'index.js': sha(js), 'index.wasm': sha(wasm) },
 };
+// Verify before installing anything; a mismatch must not destroy the prior
+// good cache.
 if (trusted && build === trusted.build) {
   for (const [file, expected] of Object.entries(trusted.files || {})) {
     if (metadata.files[file] !== expected) {
@@ -77,6 +81,13 @@ if (trusted && build === trusted.build) {
       process.exit(1);
     }
   }
+}
+
+for (const [file, buf] of [['index.js', js], ['index.wasm', wasm]]) {
+  const tmp = path.join(cache, `${file}.tmp`);
+  fs.writeFileSync(tmp, buf);
+  fs.renameSync(tmp, path.join(cache, file));
+  console.error('wrote', file, buf.length);
 }
 const btmp = path.join(cache, 'build.json.tmp');
 fs.writeFileSync(btmp, JSON.stringify(metadata, null, 2));

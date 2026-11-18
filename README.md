@@ -8,8 +8,10 @@ It contains:
 - `engine/` — a proof-of-concept headless engine that runs the real game wasm in Node with a stubbed WebGL2 context.
 - `cli/` — a Rust library + demo CLI that launches the engine and exposes a small state/input API.
 
-The game assets are **not** committed. `engine/prepare.mjs` downloads the current
-`index.js` / `index.wasm` from rebuildsim.com into `engine/cache/`.
+The game assets are **not** committed. `engine/prepare.mjs` downloads the pinned
+`index.js` / `index.wasm` from rebuildsim.com into `engine/cache/`. It refuses a
+different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
+`engine/trusted_build.json` automatically.
 
 ## TL;DR
 
@@ -64,7 +66,8 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 
 ```bash
 cd engine
-node prepare.mjs            # downloads current game assets into cache/
+node prepare.mjs            # downloads pinned game assets into cache/
+                            # (refuses a different live build unless RB_ALLOW_BUILD_UPDATE=1)
 node headless.cjs --code <LOBBY> --username MyBot
 ```
 

@@ -51,7 +51,7 @@ Flags:
 --frame-alliance red|blue  diagnostic override for the output frame (r/b accepted)
 --hub-order red|blue  force the SHIFT-1 inactive hub (tied AUTO/testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
---no-build-check    skip the trusted/live BUILD checks (offline debugging)
+--no-build-check    skip trusted/live checks (build.json asset hashes still checked)
 --allow-public      test-only: permit a non-PRIVATE or missing room_join access
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
@@ -217,7 +217,9 @@ Playwright.
   `engine/trusted_build.json` pin (build + both asset hashes), compares the
   cached `BUILD` with the live page, and exits 3 on any mismatch or fetch
   failure. `prepare.mjs` does not update the trusted pin; update it deliberately
-  after verifying a new release, or use `--no-build-check` offline.
+  after verifying a new release, or use `--no-build-check` offline. A new live
+  build is refused unless `RB_ALLOW_BUILD_UPDATE=1`; `RB_BUILD=<pin>` restores
+  the pinned assets.
   With `--server`, a local server that does not serve the HTML page soft-skips
   the live check (`ok:true, skipped:true`); use `--no-build-check` offline.
   `--no-build-check` is the explicit offline escape hatch. The `0x21` protocol

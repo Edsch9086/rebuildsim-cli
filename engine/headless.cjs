@@ -958,7 +958,7 @@ function parseFuelPacket(buf) {
 
 function locateFuelFromPacketInner() {
   if (!mem || !fuelPacketCount) return 0;
-  const deadline = Date.now() + 1500;
+  const deadline = Date.now() + 1000;
   const a = u8();
   const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const candidates = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount);
@@ -1052,7 +1052,7 @@ function scanFuelRun() {
   const count = fuelPacketCount;
   if (!count) return 0;
   const a = u8();
-  const deadline = Date.now() + 1500;
+  const deadline = Date.now() + 1000;
   const presentPackets = [...fuelPacket.values()]
     .filter(r => r.count > 0)
     .sort((a, b) => b.seen - a.seen);
@@ -1708,7 +1708,7 @@ function onTrack(name, params) {
           const stillStarting = flow.match && !clockStarted && matchStartedAt
             && Date.now() - matchStartedAt < 10000;
           if (!stillStarting && flow.match
-              && (!last41At || Date.now() - last41At >= 1500)) {
+              && (!last41At || Date.now() - last41At >= 2500)) {
             log('room screen without clock updates; resetting stale match');
             resetMatchState(true);
             emitRoom();
@@ -1881,7 +1881,7 @@ setInterval(() => {
   if (!mem || !matchStarted) return;
   const fuelNow = Date.now();
   const clockStalled = flow.match && (
-    (clockStarted && last41At && fuelNow - last41At > 3000)
+    (clockStarted && last41At && fuelNow - last41At > 4000)
     || (!clockStarted && matchStartedAt && fuelNow - matchStartedAt > 15000));
   if (clockStalled) {
     log('match clock stalled; stopping state emission');
