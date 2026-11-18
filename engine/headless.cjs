@@ -480,6 +480,12 @@ function resetMatchState(clearRoster = false) {
     roomSeats = [];
     roomNames = new Set();
     lastRoom06 = null;
+  } else {
+    for (const seat of roomSeats) {
+      allianceByName.set(seat.name, seat.alliance);
+      allianceSourceByName.set(seat.name, 'room');
+      if (seat.name === OPT.username) ourAllianceCache = seat.alliance;
+    }
   }
   cancelUiTimers();
   releaseInputs();
@@ -572,6 +578,8 @@ function applyRoom06(buf) {
       // A parsed packet that omits us starts the debounce; any packet that
       // contains us cancels it.
       log('room packet omits our seat; keeping last good seat list');
+      cancelReadyClick();
+      lastReadyClickAt = 0;
       noteSeatPresence(false);
       return false;
     }
@@ -618,12 +626,7 @@ function applyRoom06(buf) {
     if (ourSeatChanged) {
       readyClicked = false;
       lastReadyClickAt = 0;
-      readyClickPending = false;
-      if (readyClickTimer) {
-        clearTimeout(readyClickTimer);
-        uiTimers.delete(readyClickTimer);
-        readyClickTimer = null;
-      }
+      cancelReadyClick();
     }
   }
   if (roomSeats.some(s => s.name === OPT.username)) noteSeatPresence(true);
@@ -718,7 +721,7 @@ function parse41(buf) {
 }
 
 function onMatchStart() {
-  const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
+  const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.5;
   const stale = flow.match && (last41At
     ? Date.now() - last41At > 1500
     : matchStartedAt && Date.now() - matchStartedAt > 3000);
@@ -942,6 +945,7 @@ function parseFuelPacket(buf) {
   if (total !== fuelPacketCount) {
     fuelPacketCount = total;
     fuelScanCursor = 0x10000;
+    lastFuelLocate = 0;
     fuelLocateFails = 0;
     fuelAddr = 0;
     fuelSource = null;
@@ -976,6 +980,7 @@ function parseFuelPacket(buf) {
       lastFuelLocate = now;
       if (locateFuelFromPacket()) {
         fuelLocateFails = 0;
+        fuelScanCursor = 0x10000;
       } else {
         fuelLocateFails++;
         lastFuelLocate = Date.now() + (fuelLocateFails >= 4 ? 2000 : 500);
@@ -1111,6 +1116,7 @@ function scanFuelRun() {
         fuelSource = 'scan';
         fuelVerified = true;
         fuelScanCursor = 0x10000;
+        fuelLocateFails = 0;
         log('fuel array (tiny scan) at', '0x' + i.toString(16), 'count', count);
         return i;
       }
@@ -1168,6 +1174,7 @@ function scanFuelRun() {
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
       fuelScanCursor = 0x10000;
+      fuelLocateFails = 0;
       log('fuel array (scan) at', '0x' + i.toString(16), 'count', count);
       return i;
     }
@@ -1189,6 +1196,7 @@ function findFuelArray() {
     const b = locateFuelFromPacket();
     if (b) {
       fuelLocateFails = 0;
+      fuelScanCursor = 0x10000;
       return b;
     }
     fuelLocateFails++;
@@ -1214,6 +1222,9 @@ function readFuel() {
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
+    fuelScanCursor = 0x10000;
+    lastFuelLocate = 0;
+    fuelLocateFails = 0;
     return [];
   }
   const out = [];
@@ -1650,6 +1661,15 @@ function tapBox(index, x, y, text) {
   } catch (e) { log('text box error', String(e)); }
 }
 
+function cancelReadyClick() {
+  readyClickPending = false;
+  if (readyClickTimer) {
+    clearTimeout(readyClickTimer);
+    uiTimers.delete(readyClickTimer);
+    readyClickTimer = null;
+  }
+}
+
 function readyIfNeeded(force = false) {
   if (matchStarted || uiBusy || readyClickPending) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
@@ -1760,6 +1780,7 @@ function onTrack(name, params) {
         && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500);
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
+        lastRoom06 = null;
         emitRoom();
       } else if (matchLive && !roomResetTimer) {
         roomResetTimer = setTimeout(() => {
@@ -1770,6 +1791,7 @@ function onTrack(name, params) {
               && (!last41At || Date.now() - last41At >= 2500)) {
             log('room screen without clock updates; resetting stale match');
             resetMatchState(false);
+            lastRoom06 = null;
             emitRoom();
           }
         }, 1800);
@@ -1957,6 +1979,9 @@ setInterval(() => {
         fuelAddr = 0;
         fuelSource = null;
         fuelVerifyFails = 0;
+        fuelScanCursor = 0x10000;
+        lastFuelLocate = 0;
+        fuelLocateFails = 0;
         lastFuelScan = 0;
         lastFuelVerify = 0;
       }
