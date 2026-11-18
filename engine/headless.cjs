@@ -548,7 +548,7 @@ function clearRoomIdentity() {
   lastRoomKey = '';
 }
 
-function applyRoom06(buf) {
+function applyRoom06(buf, cached = false) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
     // A parse miss is not evidence that the seat is gone. Keep the last good
@@ -687,7 +687,7 @@ function applyRoom06(buf) {
     if (ourSeat && ourSeat.ready === true) readyClicked = true;
     if (!resultsPending) {
       readyIfNeeded();
-      if (host && OPT.start && !startClicked && !matchStarted && !uiBusy
+      if (!cached && host && OPT.start && !startClicked && !matchStarted && !uiBusy
           && roomSeats.length && roomSeats.every(s => s.ready === true)) {
         startClicked = true;
         uiLater(() => clickStartWhenReady(0), 1000);
@@ -756,7 +756,7 @@ function onMatchStart() {
   // During the countdown a second signal must not wipe clocks/fuel; after the
   // clock starts, only a genuinely stale/ended match can be replaced.
   if (flow.match && !clockStarted && matchStartedAt
-      && Date.now() - matchStartedAt < 10000) {
+      && Date.now() - matchStartedAt < 2500) {
     log('duplicate match_start during the countdown; keeping state');
     return;
   }
@@ -1747,8 +1747,16 @@ function readyIfNeeded(force = false) {
   }, 300);
 }
 
+function returnToRoom() {
+  const saved = lastRoom06;
+  resetMatchState(false);
+  lastRoom06 = saved;
+  if (saved) applyRoom06(saved, true);
+  emitRoom();
+}
+
 function clickStartWhenReady(attempt = 0, force = false) {
-  if (!host || resultsPending) return;
+  if (!host || resultsPending || flow.match || matchStarted) return;
   if (!force && !OPT.start) return;
   if (uiBusy) {
     uiLater(() => clickStartWhenReady(attempt, force), 500);
@@ -1840,18 +1848,14 @@ function onTrack(name, params) {
       const matchLive = starting || clockLive;
       if (resultsPending) {
         // Normal results return: the page view is the authoritative room entry.
-        resetMatchState(false);
-        lastRoom06 = null;
-        emitRoom();
+        returnToRoom();
       } else if (clockEnded) {
         // A human may click BACK before the next state tick. The timestamped
         // room latch lets the end tick emit the final state, then return to
         // the room instead of scheduling result-screen clicks.
         log('room view at the final buzzer; deferring to the end tick');
       } else if (!matchLive && (flow.match || matchWasActive)) {
-        resetMatchState(false);
-        lastRoom06 = null;
-        emitRoom();
+        returnToRoom();
       } else if (matchLive && !roomResetTimer) {
         const checkRoom = () => {
           roomResetTimer = null;
@@ -1859,15 +1863,7 @@ function onTrack(name, params) {
           if (!flow.match) {
             // The match ended or stalled before this check fired. The room
             // view is already current; clean up and re-arm the host start.
-            if (matchWasActive) {
-              resetMatchState(false);
-              lastRoom06 = null;
-              emitRoom();
-              if (flow.joined && host && OPT.start) {
-                startClicked = true;
-                uiLater(() => clickStartWhenReady(0), 1800);
-              }
-            }
+            if (matchWasActive) returnToRoom();
             return;
           }
           const clockEnded = clockStarted && lastMatchTime != null
@@ -1889,12 +1885,8 @@ function onTrack(name, params) {
         };
         roomResetTimer = setTimeout(checkRoom, 1800);
       }
-      if (flow.joined && seated && !flow.match && !uiBusy) {
-        if (host && OPT.start && !startClicked) {
-          startClicked = true;
-          uiLater(() => clickStartWhenReady(0), 1800);
-        }
-      }
+      // Host START is armed by fresh room packets in applyRoom06; do not arm
+      // it from a page view alone, which may still show stale all-ready data.
       if (OPT.debug) log('room screen');
     } else if (path === '/multi/match') {
       onMatchStart();
@@ -2157,21 +2149,13 @@ setInterval(() => {
     seatMissingSince = 0;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
-    const earlyRoom = lastRoomViewAt && Date.now() - lastRoomViewAt < 2500;
+    const earlyRoom = lastRoomViewAt && Date.now() - lastRoomViewAt < 2500
+      && lastRoomViewAt >= (lastClockChangeAt || 0);
     if (earlyRoom) {
       log('room view already seen; returning without results clicks');
-      const savedRoom06 = lastRoom06;
-      resetMatchState(false);
-      lastRoom06 = savedRoom06;
-      if (lastRoom06) {
-        // Restore the ready flags from the room packet that arrived before the
-        // end tick; a join-only bot otherwise has no fresh 0x06 to ready from.
-        applyRoom06(lastRoom06);
-      } else if (flow.joined && host && OPT.start) {
-        startClicked = true;
-        uiLater(() => clickStartWhenReady(0), 1800);
-      }
-      emitRoom();
+      // Restore ready flags from the room packet that arrived before the end
+      // tick; a join-only bot otherwise has no fresh 0x06 to ready from.
+      returnToRoom();
     } else if (!resultsClickScheduled) {
       resultsClickScheduled = true;
       resultsPending = true;
