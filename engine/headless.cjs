@@ -533,13 +533,12 @@ function applyRoom06(buf) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (oursBefore && !oursNow) {
-      // Two consecutive omissions are required before starting the demotion
-      // timer; one partial packet must not kill a live match.
+      // A parsed packet that omits us starts the debounce; any packet that
+      // contains us cancels it.
       log('room packet omits our seat; keeping last good seat list');
       noteSeatPresence(false);
       return false;
     }
-    noteSeatPresence(true);
     if (matchStarted) {
       const byName = new Map(parsed.seats.map(s => [s.name, s]));
       for (const old of roomSeats) {

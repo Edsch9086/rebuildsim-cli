@@ -599,12 +599,13 @@ engine ws close id=Some(2) code=Some(1006) room=Some(true)
 room WebSocket closed; exiting (use --allow-ws-close to keep running)
 exit=6
 
-# engine joins as a spectator
-joined as a spectator; this bot cannot drive
+# engine joins as a spectator (engine exits 7)
+room reports no driver seat; waiting for engine outcome
+engine exited code=Some(7)
 exit=7
 
-# engine never emits a room join
-join timeout: no room join after 2.0s; engine is stalled or blocked
+# engine never emits a room state
+join timeout: no room state after 2.0s; engine is stalled or blocked
 exit=5
 
 # build.json hash mismatch

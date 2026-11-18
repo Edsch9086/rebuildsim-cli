@@ -315,9 +315,9 @@ The CLI adds several watchdogs on top of the engine:
 - `--state-timeout <S>` (default 5): if a match is running and no state arrives
   for S seconds, print an error and exit `5`. This catches a stalled Node
   process, a broken stdout pipe, or a silently frozen engine.
-- `--join-timeout <S>` (default 60): if no room/seat state arrives after the
-  engine is ready, exit `5`. This catches a hung title/menu/room UI and a room
-  socket that joined but never delivered `0x06`.
+- `--join-timeout <S>` (default 60): if no `Room` event with a non-empty seat
+  list arrives after the engine is ready, exit `5`. This catches a hung
+  title/menu/room UI and a room socket that joined but never delivered `0x06`.
 - Startup deadline: if the engine never emits `ready` within 30 s, exit `5`.
 - Heartbeat: if no engine event arrives for 15 s after `ready`, exit `5`. The
   engine emits a heartbeat every second, including between matches; the wider

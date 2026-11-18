@@ -384,7 +384,6 @@ fn main() {
     let mut in_match = false;
     let mut ready_seen = false;
     let mut joined = false;
-    let mut room_state_seen = false;
     let mut join_started: Option<Instant> = None;
     let mut last_state = Instant::now();
     let mut last_heartbeat = Instant::now();
@@ -453,8 +452,7 @@ fn main() {
                 );
                 print_seats(&seats);
                 joined = true;
-                if room_state_seen || !seats.is_empty() {
-                    room_state_seen = true;
+                if !seats.is_empty() {
                     join_started = None;
                 }
                 last_heartbeat = Instant::now();
@@ -479,9 +477,6 @@ fn main() {
             Ok(Some(EngineEvent::Seats { code, seats })) => {
                 println!("room {code} seats updated");
                 print_seats(&seats);
-                if !seats.is_empty() {
-                    room_state_seen = true;
-                }
                 last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Match {
@@ -625,7 +620,6 @@ fn main() {
                                 demo = Some(Demo::default());
                             }
                             joined = false;
-                            room_state_seen = false;
                             ready_seen = false;
                             join_started = None;
                             fatal_error = false;
@@ -663,7 +657,6 @@ fn main() {
                             demo = Some(Demo::default());
                         }
                         joined = false;
-                        room_state_seen = false;
                         ready_seen = false;
                         join_started = None;
                         fatal_error = false;

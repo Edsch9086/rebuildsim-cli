@@ -572,6 +572,9 @@ pub fn validate_server(value: &str) -> Result<(), String> {
         let (host, port) = rest
             .split_once("]:")
             .ok_or_else(|| "server IPv6 must be [addr]:port".to_string())?;
+        if host.parse::<std::net::Ipv6Addr>().is_err() {
+            return Err("server IPv6 address is invalid".into());
+        }
         (host, port)
     } else {
         let (host, port) = value
@@ -1025,6 +1028,8 @@ mod tests {
         assert!(validate_options(&opts).is_err());
         opts.server = Some("[::1]:8080".into());
         assert!(validate_options(&opts).is_ok());
+        opts.server = Some("[not-ipv6]:8080".into());
+        assert!(validate_options(&opts).is_err());
     }
 
     #[test]
