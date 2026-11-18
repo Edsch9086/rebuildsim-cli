@@ -358,6 +358,7 @@ let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let readyClickPending = false, readyClickTimer = null, resultsAt = 0;
+let roomAfterEnd = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -447,6 +448,7 @@ function resetMatchState(clearRoster = false) {
   startClicks = 0;
   resultsClickScheduled = false;
   resultsPending = false;
+  roomAfterEnd = false;
   lastReadyClickAt = 0;
   readyClickPending = false;
   readyClickTimer = null;
@@ -462,6 +464,7 @@ function resetMatchState(clearRoster = false) {
   lastOurSeatAt = seated ? Date.now() : 0;
   last41At = 0;
   fuelVerifyFails = 0;
+  fuelZeroSince = 0;
   poseCache.clear();
   poseMissUntil.clear();
   lastPose.clear();
@@ -734,9 +737,9 @@ function onMatchStart() {
   // Use clock progress, not packet arrival: 0x41 can keep flowing with a
   // frozen/rejected clock during a pause or abort.
   const lastProgress = lastClockChangeAt || last41At;
-  const stale = flow.match && (lastProgress
-    ? Date.now() - lastProgress > 1500
-    : matchStartedAt && Date.now() - matchStartedAt > 3000);
+  const stale = flow.match && (clockStarted
+    ? (lastProgress ? Date.now() - lastProgress > 1500 : true)
+    : matchStartedAt && Date.now() - matchStartedAt > 10000);
   if (resultsPending) {
     // The results screen is not a match. A real rematch can only start after
     // the first back-to-room click at 3.5 s; anything earlier is a duplicate.
@@ -749,9 +752,14 @@ function onMatchStart() {
     resultsClickScheduled = false;
     cancelUiTimers();
   }
-  // Match start is idempotent per match: /multi/match and match_start both fire,
-  // and a second call during the countdown must not wipe the first clock/fuel
-  // packets. A new match after an ended/abandoned one (no /room screen) is allowed.
+  // Match start is idempotent per match: /multi/match and match_start both fire.
+  // During the countdown a second signal must not wipe clocks/fuel; after the
+  // clock starts, only a genuinely stale/ended match can be replaced.
+  if (flow.match && !clockStarted && matchStartedAt
+      && Date.now() - matchStartedAt < 10000) {
+    log('duplicate match_start during the countdown; keeping state');
+    return;
+  }
   if (flow.match && !ended && !stale) return;
   resetMatchState(false);
   flow.match = true;
@@ -955,6 +963,7 @@ let fuelPacketCount = 0;
 let fuelSource = null;
 let fuelVerified = false;
 let fuelVerifyFails = 0;
+let fuelZeroSince = 0;
 const FUEL_Z_OFFSET = Math.round(0.045 * 4096);
 let lastFuelLocate = 0;
 let fuelLocateFails = 0;
@@ -975,6 +984,7 @@ function parseFuelPacket(buf) {
     fuelSource = null;
     fuelVerified = false;
     fuelVerifyFails = 0;
+    fuelZeroSince = 0;
     fuelPacket.clear();
   }
   let added = 0;
@@ -1106,6 +1116,16 @@ function verifyFuelBase() {
   // No present packet probe: the live array must be absent everywhere at this
   // base. This is O(fuel_count) and prevents phantom present records at endgame.
   if (checked < need) return false;
+  for (let id = 0; id < fuelPacketCount; id++) {
+    const off = fuelAddr + id * 7;
+    if (off + 7 > a.length || a[off] !== 0) return false;
+  }
+  return true;
+}
+
+function fuelBaseAllZero() {
+  if (!fuelAddr || !mem || !fuelPacketCount) return false;
+  const a = u8();
   for (let id = 0; id < fuelPacketCount; id++) {
     const off = fuelAddr + id * 7;
     if (off + 7 > a.length || a[off] !== 0) return false;
@@ -1831,8 +1851,11 @@ function onTrack(name, params) {
         lastRoom06 = null;
         emitRoom();
       } else if (clockEnded) {
-        // Leave the final end state and results timers to the state emitter.
-        log('room view at the final buzzer; keeping the results flow');
+        // A human may click BACK before the next state tick. Remember it and
+        // let the end tick emit the final state, then return to the room
+        // instead of scheduling result-screen clicks.
+        roomAfterEnd = true;
+        log('room view at the final buzzer; deferring to the end tick');
       } else if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
         lastRoom06 = null;
@@ -2035,19 +2058,42 @@ setInterval(() => {
     if (verifyFuelBase()) {
       fuelVerified = true;
       fuelVerifyFails = 0;
+      fuelZeroSince = 0;
     } else {
       fuelVerified = false;
-      fuelVerifyFails++;
-      if (fuelVerifyFails >= 2) {
-        log('fuel base moved; relocating');
-        fuelAddr = 0;
-        fuelSource = null;
+      const anyPresent = [...fuelPacket.values()].some(r => r.count > 0);
+      const allZero = fuelBaseAllZero();
+      if (allZero && anyPresent) {
+        // The 0x42 sweep lags the last consumption by up to ~3 s. A zeroed
+        // base with stale present packets is the normal endgame transition;
+        // wait for one full sweep before deciding the base moved.
+        if (!fuelZeroSince) fuelZeroSince = fuelNow;
         fuelVerifyFails = 0;
-        fuelScanCursor = 0x10000;
-        lastFuelLocate = 0;
-        fuelLocateFails = 0;
-        lastFuelScan = 0;
-        lastFuelVerify = 0;
+        if (fuelNow - fuelZeroSince >= 6000) {
+          log('fuel base moved; relocating after a stale sweep');
+          fuelAddr = 0;
+          fuelSource = null;
+          fuelZeroSince = 0;
+          fuelScanCursor = 0x10000;
+          lastFuelLocate = 0;
+          fuelLocateFails = 0;
+          lastFuelScan = 0;
+          lastFuelVerify = 0;
+        }
+      } else {
+        fuelZeroSince = 0;
+        fuelVerifyFails++;
+        if (fuelVerifyFails >= 2) {
+          log('fuel base moved; relocating');
+          fuelAddr = 0;
+          fuelSource = null;
+          fuelVerifyFails = 0;
+          fuelScanCursor = 0x10000;
+          lastFuelLocate = 0;
+          fuelLocateFails = 0;
+          lastFuelScan = 0;
+          lastFuelVerify = 0;
+        }
       }
     }
   }
@@ -2104,7 +2150,18 @@ setInterval(() => {
     seatMissingSince = 0;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
-    if (!resultsClickScheduled) {
+    if (roomAfterEnd) {
+      log('room view already seen; returning without results clicks');
+      resetMatchState(false);
+      lastRoom06 = null;
+      emitRoom();
+      // The normal /room handler could not arm the host start because the end
+      // tick had not run yet; arm it now that the room state is current.
+      if (flow.joined && host && OPT.start) {
+        startClicked = true;
+        uiLater(() => clickStartWhenReady(0), 1800);
+      }
+    } else if (!resultsClickScheduled) {
       resultsClickScheduled = true;
       resultsPending = true;
       resultsAt = Date.now();
