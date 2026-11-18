@@ -1285,6 +1285,7 @@ function readFuel() {
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
+    fuelZeroSince = 0;
     fuelScanCursor = 0x10000;
     lastFuelLocate = 0;
     fuelLocateFails = 0;
@@ -1863,7 +1864,21 @@ function onTrack(name, params) {
       } else if (matchLive && !roomResetTimer) {
         const checkRoom = () => {
           roomResetTimer = null;
-          if (!flow.match || resultsPending || resultsClickScheduled) return;
+          if (resultsPending || resultsClickScheduled) return;
+          if (!flow.match) {
+            // The match ended or stalled before this check fired. The room
+            // view is already current; clean up and re-arm the host start.
+            if (matchWasActive) {
+              resetMatchState(false);
+              lastRoom06 = null;
+              emitRoom();
+              if (flow.joined && host && OPT.start) {
+                startClicked = true;
+                uiLater(() => clickStartWhenReady(0), 1800);
+              }
+            }
+            return;
+          }
           const clockEnded = clockStarted && lastMatchTime != null
             && lastMatchTime <= 0.05;
           if (clockEnded) return;
