@@ -1098,7 +1098,14 @@ function verifyFuelBase() {
   const need = Math.min(3, probes.length);
   if (checked < need) return false;
   if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
-  return ok === checked;
+  // No present packet probe: the live array must be absent everywhere at this
+  // base. This is O(fuel_count) and prevents phantom present records at endgame.
+  if (checked < need) return false;
+  for (let id = 0; id < fuelPacketCount; id++) {
+    const off = fuelAddr + id * 7;
+    if (off + 7 > a.length || a[off] !== 0) return false;
+  }
+  return true;
 }
 
 function scanFuelRun() {
