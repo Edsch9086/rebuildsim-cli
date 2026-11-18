@@ -35,6 +35,19 @@ assert.deepStrictEqual(six.seats.map(s => s.alliance),
 assert.strictEqual(six.seats.length, 6);
 console.log('six-seat alliances:', six.seats.map(s => s.name + '=' + s.alliance).join(','));
 
+// Seat order is not the team source: a reordered roster and a team swap must
+// follow the explicit team byte, not record position.
+const reordered = parseRoom06(Buffer.concat([header,
+  rec(1, 'FirstBlue'), rec(0, 'SecondRed'), rec(0, 'ThirdRed'), rec(1, 'FourthBlue')]));
+assert.deepStrictEqual(reordered.seats.map(s => s.alliance),
+  ['blue', 'red', 'red', 'blue']);
+assert.deepStrictEqual(reordered.seats.map(s => s.seat), [0, 1, 2, 3]);
+const swapped = parseRoom06(Buffer.concat([header, rec(1, 'RedCap'), rec(0, 'BlueCap')]));
+assert.strictEqual(swapped.seats[0].alliance, 'blue');
+assert.strictEqual(swapped.seats[1].alliance, 'red');
+console.log('reorder/team-swap alliances:',
+  reordered.seats.map(s => s.name + '=' + s.alliance).join(','));
+
 // Captured single-player 0x06 from build b654373 (309 bytes, one red AnchorBot).
 const capturedHex = '0655414c375100738fc5ad020200000000000000020000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000100670102000009416e63686f72426f7400000000000000001662c2950080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff0000000000000000000000000000000000008000800080ffff000000000000ff000000';
 const captured = parseRoom06(Buffer.from(capturedHex, 'hex'));

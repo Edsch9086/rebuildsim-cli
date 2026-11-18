@@ -226,9 +226,13 @@ soon as the match clock starts; `field_reset` is the 3-second reset window.
 ### Identity and alliance
 
 `state.me` and `Robot.is_me` are authoritative. `me` is matched against the CLI
-username in the live player state; alliance comes from the `0x06` seat record.
-Display names are limited to **10 printable ASCII characters** by the client; the
-engine rejects longer names rather than letting the seat name be truncated.
+username in the live player state; alliance comes from the `0x06` seat team
+byte, not from record order. Seats, robots, and spawn slots can be changed
+before the match: the engine re-reads `0x06`, switches the normalized frame to
+the new team, clears cached poses, and readies the new seat if its ready bit is
+0. Infer the spawn from the first in-match `me` pose. Display names are limited
+to **10 printable ASCII characters** by the client; the engine rejects longer
+names rather than letting the seat name be truncated.
 In a six-robot lobby, always read `me` rather than indexing `robots[0]` or
 guessing by team.
 

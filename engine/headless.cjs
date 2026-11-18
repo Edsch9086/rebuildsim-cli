@@ -4,6 +4,7 @@ if (Number(process.versions.node.split('.')[0]) < 22) {
   process.exit(1);
 }
 const crypto = require('node:crypto');
+const net = require('node:net');
 const fs = require('node:fs');
 const path = require('node:path');
 const nativeFetch = globalThis.fetch;
@@ -333,8 +334,11 @@ if (OPT.server) {
     optionError('invalid_server', 'invalid --server: use HOST:PORT (IPv6 as [addr]:port)');
   }
   const portNum = Number(port);
-  if (!host || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
-    optionError('invalid_server', 'invalid --server port');
+  if (!host || /\s/.test(host) || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+    optionError('invalid_server', 'invalid --server host/port');
+  }
+  if (bracketed && !net.isIPv6(host)) {
+    optionError('invalid_server', 'invalid --server IPv6 address');
   }
   globalThis.location.host = OPT.server;
   globalThis.location.hostname = host;
@@ -354,7 +358,7 @@ let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
-let matchStartedAt = 0, lastOurSeatAt = 0;
+let matchStartedAt = 0, lastOurSeatAt = 0, shrinkKey = null;
 let roomNames = new Set([OPT.username]);
 let lastMatchTime = null;
 let matchStarted = false;
@@ -515,6 +519,7 @@ function clearRoomIdentity() {
   fuelApplied = false;
   roomSeats = [];
   roomNames = new Set();
+  shrinkKey = null;
   allianceByName.clear();
   allianceSourceByName.clear();
   ourAllianceCache = null;
@@ -535,6 +540,21 @@ function applyRoom06(buf) {
       noteSeatPresence(false);
     }
     return false;
+  }
+  const rosterChanged = roomSeats.length !== parsed.seats.length
+    || roomSeats.some(old => {
+      const cur = parsed.seats.find(s => s.name === old.name);
+      return !cur || cur.team_flag !== old.team_flag
+        || cur.robot_id !== old.robot_id || cur.seat !== old.seat;
+    });
+  if (rosterChanged && !matchStarted) {
+    // A pre-match seat/robot/slot move invalidates cached poses and readiness.
+    log('room roster/slot changed; clearing pose caches');
+    poseCache.clear();
+    poseMissUntil.clear();
+    lastPose.clear();
+    readyClicked = false;
+    lastReadyClickAt = 0;
   }
   if (roomSeats.length) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
@@ -559,6 +579,18 @@ function applyRoom06(buf) {
         log('room state lost seats during a match; keeping last good seat list');
         return false;
       }
+    } else if (parsed.seats.length < roomSeats.length) {
+      // Lobby shrink: require the same smaller snapshot twice so one partial
+      // packet cannot drop teammates.
+      const key = parsed.seats.map(s => s.name).join(',');
+      if (shrinkKey !== key) {
+        shrinkKey = key;
+        log('room snapshot shrank; waiting for confirmation');
+        return false;
+      }
+      shrinkKey = null;
+    } else {
+      shrinkKey = null;
     }
   }
   roomSeats = parsed.seats;
@@ -1055,7 +1087,8 @@ function scanFuelRun() {
       // the heap is not accepted as the live fuel array.
       const allProbes = [...fuelPacket.values()].filter(r => r.id < count);
       const presentProbes = allProbes.filter(r => r.count > 0);
-      const probes = (presentProbes.length ? presentProbes : allProbes).slice(-5);
+      const probes = (presentProbes.length ? presentProbes : allProbes)
+        .sort((a, b) => b.seen - a.seen).slice(0, 5);
       let matched = 0, presentMatches = 0;
       for (const p of probes) {
         const res = fuelProbeResult(a, i + p.id * 7, p, 6);
@@ -1854,7 +1887,10 @@ setInterval(() => {
     }
   }
   if (!fuelAddr) {
-    if (fuelNow - lastFuelScan > 2000) { lastFuelScan = fuelNow; findFuelArray(); }
+    if (fuelNow - lastFuelScan > 2000) {
+      lastFuelScan = fuelNow;
+      if (!findFuelArray()) lastFuelScan = fuelNow + 2000;
+    }
   }
   const robots = readRobots();
   const fuel = readFuel();
@@ -1999,7 +2035,7 @@ rl.on('line', (line) => {
   else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') {
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
-    if (ourSeat && ourSeat.ready === false) {
+    if (ourSeat && ourSeat.ready === false && Date.now() - lastReadyClickAt > 4000) {
       readyClicked = true;
       lastReadyClickAt = Date.now();
       globalThis.__ctl.click(646, 688);
