@@ -731,11 +731,16 @@ function parse41(buf) {
 
 function onMatchStart() {
   const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
-  const stale = flow.match && (last41At
-    ? Date.now() - last41At > 1500
+  // Use clock progress, not packet arrival: 0x41 can keep flowing with a
+  // frozen/rejected clock during a pause or abort.
+  const lastProgress = lastClockChangeAt || last41At;
+  const stale = flow.match && (lastProgress
+    ? Date.now() - lastProgress > 1500
     : matchStartedAt && Date.now() - matchStartedAt > 3000);
   if (resultsPending) {
-    if (Date.now() - resultsAt < 2000) {
+    // The results screen is not a match. A real rematch can only start after
+    // the first back-to-room click at 3.5 s; anything earlier is a duplicate.
+    if (Date.now() - resultsAt < 3500) {
       log('ignoring duplicate match_start while results are pending');
       return;
     }
@@ -1216,6 +1221,11 @@ function findFuelArray() {
   if (![...fuelPacket.values()].some(r => r.count > 0)) {
     // All known fuel is consumed; keep a previously verified base rather than
     // locking onto an arbitrary zero region.
+    if (fuelAddr && !verifyFuelBase()) {
+      fuelAddr = 0;
+      fuelSource = null;
+      fuelVerified = false;
+    }
     return fuelAddr;
   }
   if (fuelAddr) {
@@ -1812,22 +1822,28 @@ function onTrack(name, params) {
       const clockLive = flow.match && clockStarted && lastMatchTime != null
         && lastMatchTime > 0.05 && lastClockChangeAt
         && Date.now() - lastClockChangeAt < 3000;
+      const clockEnded = flow.match && clockStarted && lastMatchTime != null
+        && lastMatchTime <= 0.05;
       const matchLive = starting || clockLive;
-      if (!matchLive && (flow.match || matchWasActive)) {
+      if (resultsPending) {
+        // Normal results return: the page view is the authoritative room entry.
+        resetMatchState(false);
+        lastRoom06 = null;
+        emitRoom();
+      } else if (clockEnded) {
+        // Leave the final end state and results timers to the state emitter.
+        log('room view at the final buzzer; keeping the results flow');
+      } else if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
         lastRoom06 = null;
         emitRoom();
       } else if (matchLive && !roomResetTimer) {
         const checkRoom = () => {
           roomResetTimer = null;
-          if (!flow.match) {
-            if (resultsPending || matchWasActive) {
-              resetMatchState(false);
-              lastRoom06 = null;
-              emitRoom();
-            }
-            return;
-          }
+          if (!flow.match || resultsPending || resultsClickScheduled) return;
+          const clockEnded = clockStarted && lastMatchTime != null
+            && lastMatchTime <= 0.05;
+          if (clockEnded) return;
           const stillStarting = flow.match && !clockStarted && matchStartedAt
             && Date.now() - matchStartedAt < 10000;
           const liveNow = flow.match && clockStarted && lastMatchTime != null
@@ -2080,6 +2096,7 @@ setInterval(() => {
   if (match.ended && flow.match) {
     // Keep emitting the final/end states, but room events and the CLI should
     // no longer consider this a live match.
+    if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
     flow.match = false;
     matchStarted = false;
     clockStarted = false;
