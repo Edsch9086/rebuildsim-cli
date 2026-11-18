@@ -1,4 +1,8 @@
 // Headless REBUILD engine harness: real wasm, stub WebGL, DOM events, memory capture.
+if (Number(process.versions.node.split('.')[0]) < 22) {
+  console.error('Node >=22 is required (global WebSocket/fetch)');
+  process.exit(1);
+}
 const crypto = require('node:crypto');
 const fs = require('node:fs');
 const path = require('node:path');
@@ -263,6 +267,7 @@ const OPT = {
   hubOrder: getArg('hub-order', ''),
   expectBuild: getArg('expect-build', ''),
   noBuildCheck: process.argv.includes('--no-build-check'),
+  allowPublic: process.argv.includes('--allow-public'),
 };
 globalThis.__RB_DEBUG = OPT.debug;
 if (!fs.existsSync(path.join(ASSET_DIR, 'index.js')) || !fs.existsSync(path.join(ASSET_DIR, 'index.wasm'))) {
@@ -897,6 +902,7 @@ function parseFuelPacket(buf) {
 
 function locateFuelFromPacketInner() {
   if (!mem || !fuelPacketCount) return 0;
+  const deadline = Date.now() + 1500;
   const a = u8();
   const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const candidates = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount);
@@ -911,6 +917,7 @@ function locateFuelFromPacketInner() {
     pat.writeUInt16LE(probe.y, 2);
     let pos = 0, hits = 0;
     while (hits++ < 40) {
+      if (Date.now() > deadline) { log('fuel locate timed out'); return 0; }
       const hit = hay.indexOf(pat, pos);
       if (hit < 0) break;
       pos = hit + 1;
@@ -993,6 +1000,8 @@ function scanFuelRun() {
   const count = fuelPacketCount;
   if (!count) return 0;
   const a = u8();
+  const deadline = Date.now() + 1500;
+  const packetHasPresent = [...fuelPacket.values()].some(r => r.count > 0);
   if (count < 3) {
     // Tiny matches have no long run to anchor on, so match every packet
     // record (x/y/z and present) exactly. This is stronger than the
@@ -1001,13 +1010,16 @@ function scanFuelRun() {
     if (probes.length < count) return 0;
     const lim = a.length - count * 7;
     for (let i = 0x10000; i <= lim; i++) {
+      if ((i & 0xfff) === 0 && Date.now() > deadline) {
+        log('tiny fuel scan timed out'); return 0;
+      }
       let ok = true, presentMatches = 0;
       for (const p of probes) {
         const res = fuelProbeResult(a, i + p.id * 7, p, 3);
         if (res === 'invalid' || res === 'mismatch') { ok = false; break; }
         if (res === 'present') presentMatches++;
       }
-      if (ok && (presentMatches >= 1 || probes.every(p => p.count === 0))) {
+      if (ok && (presentMatches >= 1 || !packetHasPresent)) {
         fuelAddr = i;
         fuelSource = 'scan';
         fuelVerified = true;
@@ -1024,11 +1036,17 @@ function scanFuelRun() {
       .filter(j => j >= probe && j < count)
     : [];
   for (let i = 0x10000; i <= lim; i++) {
-    let ok = true;
+    if ((i & 0xfff) === 0 && Date.now() > deadline) {
+      log('fuel scan timed out'); return 0;
+    }
+    let ok = true, presentSeen = false;
     for (let j = 0; j < probe; j++) {
-      if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
+      const off = i + j * 7;
+      if (!validFuelRecord(a, off)) { ok = false; break; }
+      if (a[off] === 1) presentSeen = true;
     }
     if (!ok) continue;
+    if (packetHasPresent && !presentSeen) continue;
     for (const j of spread) {
       if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
@@ -1341,6 +1359,28 @@ function emitFuelBinary(fuel, frameSeq) {
 let buildMeta = null;
 try { buildMeta = JSON.parse(fs.readFileSync(BUILD_FILE, 'utf8')); } catch {}
 const buildHash = buildMeta && buildMeta.build ? buildMeta.build : null;
+let trustedBuild = null;
+try {
+  trustedBuild = JSON.parse(fs.readFileSync(path.join(__dirname, 'trusted_build.json'), 'utf8'));
+} catch {}
+if (!OPT.noBuildCheck) {
+  if (!trustedBuild) {
+    log('build pin failed: engine/trusted_build.json is missing');
+    process.exit(3);
+  }
+  if (buildHash !== trustedBuild.build) {
+    log('build pin failed: assets are', buildHash, 'but the trusted build is', trustedBuild.build);
+    emit({ type: 'error', error: 'untrusted_build', cached: buildHash, trusted: trustedBuild.build });
+    setTimeout(() => process.exit(3), 100);
+  }
+  for (const [file, expected] of Object.entries(trustedBuild.files || {})) {
+    if (!buildMeta || !buildMeta.files || buildMeta.files[file] !== expected) {
+      log('build pin failed: build.json hash for', file, 'does not match the trusted pin');
+      emit({ type: 'error', error: 'untrusted_build_asset', file });
+      setTimeout(() => process.exit(3), 100);
+    }
+  }
+}
 if (!buildHash && !OPT.noBuildCheck) {
   log('build pin failed: no build hash in', BUILD_FILE, '(run node prepare.mjs or pass --no-build-check)');
   process.exit(3);
@@ -1658,6 +1698,14 @@ function onTrack(name, params) {
       host = p.is_host === 'yes' || p.is_host === true || p.is_host === 'true' || p.is_host === 1;
     seated = p.role === 'driver';
     role = p.role;
+    const access = String(p.access || '').toUpperCase();
+    if (!OPT.allowPublic && access && access !== 'PRIVATE') {
+      log('room access is', access, '; refusing a non-private lobby');
+      emit({ type: 'error', error: 'public_room', detail: access });
+      setTimeout(() => process.exit(2), 100);
+      return;
+    }
+    if (!access) log('warning: room access not reported; private lobby expected');
     roomCode = (roomCode || OPT.code).toUpperCase();
     if (OPT.code && roomCode && roomCode !== OPT.code) {
       failJoin('room_code_mismatch', `joined ${roomCode}, expected ${OPT.code}`);

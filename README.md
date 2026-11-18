@@ -20,7 +20,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
   send robot poses. Robot poses come from the client-side deterministic
   simulation.
 - The wasm runs **headless in Node** with a no-op WebGL2 context at ~59 fps. No
-  Chromium, no Playwright, no GPU. Measured ~19% of one core and ~180 MB RSS for
+  Chromium, no Playwright, no GPU. Requires Node >= 22. Measured ~19% of one core and ~180 MB RSS for
   a single bot at default fuel; 3v3/4,300-fuel runs are not yet measured.
 - We can drive the real client's UI in the headless engine (create/join by code,
   ready, start) and read the live fuel array + player pose structs out of wasm memory.
@@ -53,7 +53,7 @@ The game assets are **not** committed. `engine/prepare.mjs` downloads the curren
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
 | Analog axes / gamepad | ✅ virtual standard gamepad; drive/turn/intake/outtake/shoot |
 | Auto/teleop phase from `0x41` clock | ✅ countdown/auto/teleop + substages |
-| Build pin / drift fail-fast | ✅ `build.json` + live check + `--expect-build` |
+| Build pin / drift fail-fast | ✅ `trusted_build.json` + `build.json` + live check + `--expect-build` |
 | Timeouts / disconnect handling | ✅ state watchdog, room-WS exit, lobby restart |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |

@@ -51,7 +51,8 @@ Flags:
 --frame-alliance red|blue  diagnostic override for the output frame (r/b accepted)
 --hub-order red|blue  force the SHIFT-1 inactive hub (tied AUTO/testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
---no-build-check    skip the live BUILD fetch (offline debugging)
+--no-build-check    skip the trusted/live BUILD checks (offline debugging)
+--allow-public      test-only: permit a non-PRIVATE room_join access
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
 --wslog             capture WebSocket frames for dumpws (also on with --debug)
@@ -130,12 +131,20 @@ fuel (`present u8, x u16, y u16, z u16`) for the following state; that state has
 ## Tests
 
 ```bash
-node room06_test.cjs
-node frame_test.cjs
-node hopper_test.cjs
-node hub_test.cjs
-node binary_test.cjs
+npm test                 # room06 + hub + matchstate (offline)
+cargo build -p rebuildsim-cli
+npm run test:cli         # deterministic fake-engine CLI exit codes
+
+RB_ALLOW_LIVE_TESTS=1 npm run test:hopper
+RB_ALLOW_LIVE_TESTS=1 npm run test:frame
+RB_ALLOW_LIVE_TESTS=1 npm run test:binary
+# optional 4-client browser test (installs playwright-core devDependency):
+RB_ALLOW_LIVE_TESTS=1 npm run test:multibot
 ```
+
+Live tests create/join private rooms and skip unless `RB_ALLOW_LIVE_TESTS=1`.
+`test:cli` uses inline fake engines, needs no network, and requires a built
+`target/debug/rebuildsim-cli` (or `RB_CLI=/path/to/cli`).
 
 `matchstate_test.cjs` checks the pre-clock countdown/end boundary. `room06_test.cjs` parses a synthetic 5-seat packet (seats 0–2 red, seat 3 blue,
 seat 4 red) and can optionally check a captured packet via
@@ -148,10 +157,10 @@ creates a 25% fuel room and checks the `RSB1` framing, packed 150-fuel frame,
 and `fuel_bin` state.
 
 `multibot_browser.mjs` is the optional 4-client identity/control test (engine
-host + three browser clients in separate contexts). It needs `playwright-core`
-and a Chromium binary; see the header comment. `package.json` declares the Node
-engine and the test scripts, but `playwright-core` is intentionally not a
-dependency because the headless engine itself does not need it.
+host + three browser clients in separate contexts). `playwright-core` is a
+devDependency; set `PLAYWRIGHT_CHROMIUM` to an executable if Playwright's
+bundled browser is not installed. The headless engine itself does not use
+Playwright.
 
 ## Known limitations
 
@@ -204,8 +213,11 @@ dependency because the headless engine itself does not need it.
   fresh lobby/room event arrives.
 - Game updates can move memory addresses or change the protocol. `prepare.mjs`
   downloads both assets to temp files, records their SHA-256 hashes, and writes
-  `build.json` last. The engine verifies the hashes, compares the cached
-  `BUILD` with the live page, and exits 3 on any mismatch or fetch failure.
+  `build.json` last. The engine also verifies the tracked
+  `engine/trusted_build.json` pin (build + both asset hashes), compares the
+  cached `BUILD` with the live page, and exits 3 on any mismatch or fetch
+  failure. `prepare.mjs` does not update the trusted pin; update it deliberately
+  after verifying a new release, or use `--no-build-check` offline.
   With `--server`, a local server that does not serve the HTML page soft-skips
   the live check (`ok:true, skipped:true`); use `--no-build-check` offline.
   `--no-build-check` is the explicit offline escape hatch. The `0x21` protocol

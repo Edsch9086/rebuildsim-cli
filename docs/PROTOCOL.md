@@ -434,9 +434,11 @@ var BUILD="b654373", Module={locateFile:...}
 
 and the wasm handshake contains `DUBR` + the same hash. `engine/prepare.mjs`
 parses the page, downloads the matching `index.js`/`index.wasm`, records their
-SHA-256 hashes, and writes `build.json` last. The engine verifies the hashes and
-compares the cached `BUILD` with the live page; any mismatch or fetch failure
-exits 3. The one exception is `--server`: a local server that does not serve the
+SHA-256 hashes, and writes `build.json` last. The engine verifies those hashes,
+checks the tracked `engine/trusted_build.json` pin (both asset hashes and the
+build), and compares the cached `BUILD` with the live page; any mismatch or
+fetch failure exits 3. The trusted pin is deliberately not updated by
+`prepare.mjs`. The one exception is `--server`: a local server that does not serve the
 HTML page soft-skips the live check (`ok:true, skipped:true`), because local
 WebSocket-only test servers are expected. Pass `--no-build-check` explicitly
 when running fully offline. The observed `0x21 00 01 00 00` carries only protocol version 1; the

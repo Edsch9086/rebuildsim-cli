@@ -14,6 +14,11 @@
     "test:hopper": "node hopper_test.cjs",
     "test:frame": "node frame_test.cjs",
     "test:binary": "node binary_test.cjs",
-    "test:multibot": "node multibot_browser.mjs"
+    "test:multibot": "node multibot_browser.mjs",
+    "test": "npm run test:room06 && npm run test:hub && npm run test:matchstate",
+    "test:cli": "node cli_contract_test.cjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.65.1"
   }
 }

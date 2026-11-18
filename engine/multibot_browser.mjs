@@ -23,8 +23,6 @@ if (process.env.RB_ALLOW_LIVE_TESTS !== '1') {
 
 const OUT = process.env.RB_TEST_OUT || path.join(os.tmpdir(), 'rebuildsim-tests');
 fs.mkdirSync(OUT, { recursive: true });
-const exe = process.env.PLAYWRIGHT_CHROMIUM
-  || '/home/edsch/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome';
 const wait=ms=>new Promise(r=>setTimeout(r,ms));
 const env={...process.env, RB_ASSET_DIR: ASSETS};
 
@@ -41,9 +39,11 @@ readline.createInterface({input:host.stdout}).on('line', line=>{
 for(let t=0;t<400;t++){ await wait(100); if(code) break; }
 if(!code){ console.log('no host room'); process.exit(1); }
 
-const browser=await chromium.launch({executablePath:exe,headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled',
+const launchOpts={headless:true,args:['--no-sandbox','--disable-dev-shm-usage','--disable-blink-features=AutomationControlled',
   '--disable-background-timer-throttling','--disable-backgrounding-occluded-windows',
-  '--disable-renderer-backgrounding']});
+  '--disable-renderer-backgrounding']};
+if(process.env.PLAYWRIGHT_CHROMIUM) launchOpts.executablePath=process.env.PLAYWRIGHT_CHROMIUM;
+const browser=await chromium.launch(launchOpts);
 async function makeBot(label){
   const ctx=await browser.newContext({viewport:{width:1280,height:720},userAgent:'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/143.0.0.0 Safari/537.36'});
   await ctx.addInitScript(()=>{
