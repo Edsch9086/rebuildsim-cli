@@ -441,7 +441,7 @@ function resetMatchState() {
   if (roomResetTimer) { clearTimeout(roomResetTimer); roomResetTimer = null; }
   if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
   seatMissingSince = 0;
-  lastOurSeatAt = 0;
+  lastOurSeatAt = seated ? Date.now() : 0;
   last41At = 0;
   fuelVerifyFails = 0;
   poseCache.clear();
@@ -458,6 +458,9 @@ function resetMatchState() {
   allianceByName.clear();
   allianceSourceByName.clear();
   ourAllianceCache = null;
+  roomSeats = [];
+  roomNames = new Set();
+  lastRoom06 = null;
   cancelUiTimers();
   releaseInputs();
   lastMatchTime = null;
@@ -553,6 +556,7 @@ function applyRoom06(buf) {
     }
   }
   roomSeats = parsed.seats;
+  if (roomSeats.some(s => s.name === OPT.username)) noteSeatPresence(true);
   if (roomSeats.length) {
     const names = roomSeats.map(s => s.name);
     // Name-keyed identity is only ambiguous when OUR name is duplicated. Two
@@ -890,12 +894,13 @@ function parseFuelPacket(buf) {
   }
 }
 
-function locateFuelFromPacket() {
+function locateFuelFromPacketInner() {
   if (!mem || !fuelPacketCount) return 0;
   const a = u8();
   const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
-  const probes = [...fuelPacket.values()]
-    .filter(r => r.id < fuelPacketCount)
+  const candidates = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount);
+  const present = candidates.filter(r => r.count > 0);
+  const probes = (present.length ? present : candidates)
     .sort((a, b) => b.seen - a.seen)
     .slice(0, 10);
   if (!probes.length) return 0;
@@ -919,7 +924,7 @@ function locateFuelFromPacket() {
         if (res === 'present') { ok++; presentMatches++; }
       }
       if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)
-          && (presentMatches >= 1 || probes.every(q => q.count === 0))) {
+          && (presentMatches >= 1 || present.length === 0)) {
         fuelAddr = base;
         fuelSource = 'packet';
         fuelVerified = true;
@@ -929,6 +934,14 @@ function locateFuelFromPacket() {
     }
   }
   return 0;
+}
+
+function locateFuelFromPacket() {
+  const t0 = Date.now();
+  const base = locateFuelFromPacketInner();
+  const spent = Date.now() - t0;
+  if (spent > 100 && last41At) last41At += spent;
+  return base;
 }
 
 function validFuelRecord(a, off) {
@@ -954,7 +967,9 @@ function fuelProbeResult(a, off, p, tol) {
 function verifyFuelBase() {
   if (!fuelAddr || !fuelPacket.size || !mem) return false;
   const a = u8();
-  const probes = [...fuelPacket.values()]
+  const all = [...fuelPacket.values()];
+  const present = all.filter(r => r.count > 0);
+  const probes = (present.length ? present : all)
     .sort((a, b) => b.seen - a.seen)
     .slice(0, 5);
   let checked = 0, ok = 0, presentChecked = 0, presentOk = 0;
@@ -969,7 +984,7 @@ function verifyFuelBase() {
   const need = Math.min(3, probes.length);
   if (checked < need) return false;
   if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
-  return true;
+  return present.length === 0;
 }
 
 function scanFuelRun() {
@@ -1019,7 +1034,9 @@ function scanFuelRun() {
     if (ok) {
       // Correlate with recent packet records so an older copy elsewhere in
       // the heap is not accepted as the live fuel array.
-      const probes = [...fuelPacket.values()].filter(r => r.id < count).slice(-5);
+      const allProbes = [...fuelPacket.values()].filter(r => r.id < count);
+      const presentProbes = allProbes.filter(r => r.count > 0);
+      const probes = (presentProbes.length ? presentProbes : allProbes).slice(-5);
       let matched = 0, presentMatches = 0;
       for (const p of probes) {
         const res = fuelProbeResult(a, i + p.id * 7, p, 6);
@@ -1027,7 +1044,7 @@ function scanFuelRun() {
         else if (res === 'present') { matched++; presentMatches++; }
       }
       if (probes.length && matched < Math.ceil(probes.length * 0.6)) continue;
-      if (probes.length && presentMatches === 0 && !probes.every(p => p.count === 0)) continue;
+      if (presentProbes.length && presentMatches === 0) continue;
       fuelAddr = i;
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
