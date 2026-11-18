@@ -471,9 +471,9 @@ RESULT matches 2 states 384 ends 8 rooms 10
 
 A later run after the rematch roster-reset change also produced
 `MATCH 2` about five seconds after the results return (`matches 2`, `rematch=0`).
-A final run after auto-clock gating and room-return packet clearing produced:
-`MATCH 2`, room seats 1 at match start, `meMissing 0`, and `unknownFrame 0`
-across 383 states.
+A final run after auto-clock gating, room-return packet clearing, and the
+end-state stop produced: `MATCH 2`, room seats 1 at match start, exactly one
+final `end` state, `meMissing 0`, and `unknownFrame 0` across 377 states.
 
 ## 12. Verification log
 
