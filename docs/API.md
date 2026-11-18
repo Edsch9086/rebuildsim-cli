@@ -329,7 +329,7 @@ The CLI adds several watchdogs on top of the engine:
 - Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
   the socket that delivered `0x06` closes. The CLI exits `6` in that case
   unless `--allow-ws-close` is passed.
-- If `0x41` stops for 4 s during a live match (or no auto clock above 143 s
+- If `0x41` stops for 4 s during a live match (or no auto clock at 143 s or above
   arrives within 15 s of match start), the engine emits `match_clock_stalled`;
   the CLI exits `5` immediately (or via the state timeout if states simply
   stop). A stale positive teleop clock from the previous match is ignored until

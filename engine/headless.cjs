@@ -549,7 +549,7 @@ function applyRoom06(buf) {
     // list but debounce the missing-seat path so repeated empty packets can
     // demote/exit instead of leaving a zombie.
     log('room state parse produced no seats; keeping last good seat list');
-    if (flow.joined && seated && lastOurSeatAt
+    if (!resultsPending && flow.joined && seated && lastOurSeatAt
         && Date.now() - lastOurSeatAt > 15000) {
       log('no seat in any room packet for 15s; starting demotion');
       noteSeatPresence(false);
@@ -576,11 +576,11 @@ function applyRoom06(buf) {
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (oursBefore && !oursNow) {
       // A parsed packet that omits us starts the debounce; any packet that
-      // contains us cancels it.
+      // contains us cancels it. Results-screen packets must not demote us.
       log('room packet omits our seat; keeping last good seat list');
       cancelReadyClick();
       lastReadyClickAt = 0;
-      noteSeatPresence(false);
+      if (!resultsPending) noteSeatPresence(false);
       return false;
     }
     if (matchStarted && clockStarted) {
@@ -669,7 +669,7 @@ function applyRoom06(buf) {
       return false;
     }
     if (!ours) {
-      noteSeatPresence(false);
+      if (!resultsPending) noteSeatPresence(false);
       return false;
     }
     if (!seated || role !== 'driver') {
@@ -679,11 +679,13 @@ function applyRoom06(buf) {
     }
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
     if (ourSeat && ourSeat.ready === true) readyClicked = true;
-    readyIfNeeded();
-    if (host && OPT.start && !startClicked && !matchStarted && !uiBusy
-        && roomSeats.length && roomSeats.every(s => s.ready === true)) {
-      startClicked = true;
-      uiLater(() => clickStartWhenReady(0), 1000);
+    if (!resultsPending) {
+      readyIfNeeded();
+      if (host && OPT.start && !startClicked && !matchStarted && !uiBusy
+          && roomSeats.length && roomSeats.every(s => s.ready === true)) {
+        startClicked = true;
+        uiLater(() => clickStartWhenReady(0), 1000);
+      }
     }
   }
   return true;
@@ -725,6 +727,10 @@ function onMatchStart() {
   const stale = flow.match && (last41At
     ? Date.now() - last41At > 1500
     : matchStartedAt && Date.now() - matchStartedAt > 3000);
+  if (resultsPending) {
+    log('ignoring match_start while results are pending');
+    return;
+  }
   // Match start is idempotent per match: /multi/match and match_start both fire,
   // and a second call during the countdown must not wipe the first clock/fuel
   // packets. A new match after an ended/abandoned one (no /room screen) is allowed.
@@ -1012,16 +1018,17 @@ function locateFuelFromPacketInner() {
       pos = hit + 1;
       const base = hit - 1 - probe.id * 7;
       if (base < 0) continue;
-      let ok = 0, total = 0, presentMatches = 0;
+      let ok = 0, total = 0, presentMatches = 0, allAbsent = true;
       for (const q of probes) {
         const res = fuelProbeResult(a, base + q.id * 7, q, 3);
         if (res === 'invalid') continue;
         total++;
         if (res === 'absent') { ok++; continue; }
+        allAbsent = false;
         if (res === 'present') { ok++; presentMatches++; }
       }
       if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)
-          && (presentMatches >= 1 || present.length === 0)) {
+          && (presentMatches >= 1 || (present.length === 0 && allAbsent))) {
         fuelAddr = base;
         fuelSource = 'packet';
         fuelVerified = true;
@@ -1078,7 +1085,7 @@ function verifyFuelBase() {
   const need = Math.min(3, probes.length);
   if (checked < need) return false;
   if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
-  return true;
+  return ok === checked;
 }
 
 function scanFuelRun() {
@@ -1170,6 +1177,7 @@ function scanFuelRun() {
       }
       if (probes.length && matched < Math.ceil(probes.length * 0.6)) continue;
       if (presentProbes.length && presentMatches === 0 && !anchorOk) continue;
+      if (!presentProbes.length && matched !== probes.length) continue;
       fuelAddr = i;
       fuelSource = 'scan';
       fuelVerified = probes.length > 0;
@@ -1775,9 +1783,9 @@ function onTrack(name, params) {
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
       const starting = flow.match && !clockStarted && matchStartedAt
-        && Date.now() - matchStartedAt < 3000;
-      const matchLive = starting || (flow.match && clockStarted && lastMatchTime != null
-        && lastMatchTime > 0.5 && last41At && Date.now() - last41At < 2500);
+        && Date.now() - matchStartedAt < 10000;
+      const matchLive = starting
+        || (flow.match && last41At && Date.now() - last41At < 2500);
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
         lastRoom06 = null;
@@ -1787,9 +1795,8 @@ function onTrack(name, params) {
           roomResetTimer = null;
           if (!flow.match) return;
           const stillStarting = flow.match && !clockStarted && matchStartedAt
-            && Date.now() - matchStartedAt < 3000;
-          const liveNow = flow.match && clockStarted && lastMatchTime != null
-            && lastMatchTime > 0.5 && last41At && Date.now() - last41At < 2500;
+            && Date.now() - matchStartedAt < 10000;
+          const liveNow = flow.match && last41At && Date.now() - last41At < 2500;
           if (!stillStarting && !liveNow) {
             log('room screen without a live clock; resetting stale match');
             resetMatchState(false);
