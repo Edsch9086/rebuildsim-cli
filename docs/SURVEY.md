@@ -478,8 +478,9 @@ The final endgame-fuel and results-lifecycle runs on `8f78c6d` and `3b5367a`
 produced: `matches 2 states 377 ends 1 rooms 10`, `meMissing 0`, `unknownFrame
 0`, `fuelOk 377/377`, and `resultsErrors 0`, with the log showing
 `results: back to room`. This confirms the exhaustive all-absent fuel
-verification, the early room-return handling, and the stalled-clock room
-recovery do not disturb normal play or the rematch.
+verification and the stalled-clock room recovery do not disturb normal play or
+the rematch; the live run exercised the normal results return, while the early
+room-return path is covered by the timestamped latch and cached-room replay.
 
 ## 12. Verification log
 
