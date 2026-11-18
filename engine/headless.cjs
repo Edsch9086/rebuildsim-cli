@@ -334,7 +334,9 @@ if (OPT.server) {
     optionError('invalid_server', 'invalid --server: use HOST:PORT (IPv6 as [addr]:port)');
   }
   const portNum = Number(port);
-  if (!host || /\s/.test(host) || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
+  if (!host || /\s/.test(host) || /[\/?#@]/.test(host)
+      || (!bracketed && !/^[A-Za-z0-9._-]+$/.test(host))
+      || !Number.isInteger(portNum) || portNum < 1 || portNum > 65535) {
     optionError('invalid_server', 'invalid --server host/port');
   }
   if (bracketed && !net.isIPv6(host)) {
@@ -601,7 +603,7 @@ function applyRoom06(buf) {
     } else if (parsed.seats.length < roomSeats.length) {
       // Lobby shrink: require the same smaller snapshot twice so one partial
       // packet cannot drop teammates.
-      const key = parsed.seats.map(s => s.name).join(',');
+      const key = JSON.stringify(parsed.seats.map(s => s.name));
       if (shrinkKey !== key) {
         shrinkKey = key;
         log('room snapshot shrank; waiting for confirmation');
@@ -999,11 +1001,7 @@ function locateFuelFromPacketInner() {
 }
 
 function locateFuelFromPacket() {
-  const t0 = Date.now();
-  const base = locateFuelFromPacketInner();
-  const spent = Date.now() - t0;
-  if (spent > 100 && last41At) last41At += spent;
-  return base;
+  return locateFuelFromPacketInner();
 }
 
 function validFuelRecord(a, off) {
@@ -1055,7 +1053,10 @@ function scanFuelRun() {
   if (!count) return 0;
   const a = u8();
   const deadline = Date.now() + 1500;
-  const packetHasPresent = [...fuelPacket.values()].some(r => r.count > 0);
+  const presentPackets = [...fuelPacket.values()]
+    .filter(r => r.count > 0)
+    .sort((a, b) => b.seen - a.seen);
+  const packetHasPresent = presentPackets.length > 0;
   if (count < 3) {
     // Tiny matches have no long run to anchor on, so match every packet
     // record (x/y/z and present) exactly. This is stronger than the
@@ -1093,14 +1094,15 @@ function scanFuelRun() {
     if ((i & 0xfff) === 0 && Date.now() > deadline) {
       log('fuel scan timed out'); return 0;
     }
-    let ok = true, presentSeen = false;
+    let ok = true;
     for (let j = 0; j < probe; j++) {
-      const off = i + j * 7;
-      if (!validFuelRecord(a, off)) { ok = false; break; }
-      if (a[off] === 1) presentSeen = true;
+      if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
     if (!ok) continue;
-    if (packetHasPresent && !presentSeen) continue;
+    if (packetHasPresent) {
+      const anchor = presentPackets[0];
+      if (fuelProbeResult(a, i + anchor.id * 7, anchor, 6) !== 'present') continue;
+    }
     for (const j of spread) {
       if (!validFuelRecord(a, i + j * 7)) { ok = false; break; }
     }
@@ -1141,13 +1143,7 @@ function findFuelArray() {
     const b = locateFuelFromPacket();
     if (b) return b;
   }
-  const scanStart = Date.now();
-  const scanned = scanFuelRun();
-  const spent = Date.now() - scanStart;
-  // Compensate only the time actually spent in the synchronous scan; do not
-  // mask a genuine loss of 0x41.
-  if (spent > 100 && last41At) last41At += spent;
-  return scanned;
+  return scanFuelRun();
 }
 
 function readFuel() {

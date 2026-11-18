@@ -13,7 +13,7 @@ if (!fs.existsSync(CLI)) {
 }
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'rb-cli-'));
-const heartbeat = 'setInterval(()=>console.log(JSON.stringify({type:"heartbeat",t:Date.now()/1000,ws_open:2,ws_closed:0})),500);';
+const heartbeat = 'setInterval(()=>console.log(JSON.stringify({type:"heartbeat",t:Date.now()/1000,ws_open:2,ws_closed:0})),500); process.stdin.resume(); process.stdin.on("end",()=>process.exit(0));';
 const seats = '[{seat:0,name:"Bot",team_flag:0,alliance:"red",ready:true}]';
 function fake(name, body) {
   const file = path.join(dir, name + '.cjs');
@@ -54,8 +54,9 @@ function run(engine, args, timeoutMs = 7000) {
 }
 
 let failures = 0;
-function check(name, result, wantCode, wantAlive = false) {
-  const ok = wantAlive ? result.timedOut : (!result.timedOut && result.code === wantCode);
+function check(name, result, wantCode, wantAlive = false, wantErr = '') {
+  const ok = (wantAlive ? result.timedOut : (!result.timedOut && result.code === wantCode))
+    && (!wantErr || result.err.includes(wantErr));
   console.log(`${ok ? 'OK' : 'FAIL'} ${name} code=${result.code} timedOut=${result.timedOut}`);
   if (!ok) {
     failures++;
@@ -66,7 +67,7 @@ function check(name, result, wantCode, wantAlive = false) {
 (async () => {
   check('spectator exits 7', await run(scripts.spectator, ['--code', 'SPEC1']), 7);
   check('join timeout exits 5', await run(scripts.noroom, ['--code', 'NORM1', '--join-timeout', '2']), 5);
-  check('stalled clock exits 5', await run(scripts.stall, ['--code', 'STAL1']), 5);
+  check('stalled clock exits 5', await run(scripts.stall, ['--code', 'STAL1', '--state-timeout', '30']), 5, false, 'stalled match clock');
   check('not-all-ready exits 5', await run(scripts.notready, ['--code', 'NREA1']), 5);
   check('transient seat loss stays alive', await run(scripts.transient, ['--code', 'TRAN1'], 3000), null, true);
   if (failures) {

@@ -15,14 +15,29 @@ const cache = path.join(__dirname, 'cache');
 fs.mkdirSync(cache, { recursive: true });
 
 const base = process.env.RB_BASE_URL || 'https://rebuildsim.com/';
-console.error('fetching', base);
-const page = await fetch(base, { signal: AbortSignal.timeout(30000) });
-if (!page.ok) throw new Error(`${base}: HTTP ${page.status}`);
-const html = await page.text();
-const m = html.match(/BUILD\s*=\s*["']([0-9a-f]+)["']/);
-if (!m) throw new Error('could not find BUILD hash in index.html');
-const build = m[1];
+let trusted = null;
+try {
+  trusted = JSON.parse(fs.readFileSync(path.join(__dirname, 'trusted_build.json'), 'utf8'));
+} catch {}
+
+let build = process.env.RB_BUILD || null;
+if (!build) {
+  console.error('fetching', base);
+  const page = await fetch(base, { signal: AbortSignal.timeout(30000) });
+  if (!page.ok) throw new Error(`${base}: HTTP ${page.status}`);
+  const html = await page.text();
+  const m = html.match(/BUILD\s*=\s*["']([0-9a-f]+)["']/);
+  if (!m) throw new Error('could not find BUILD hash in index.html');
+  build = m[1];
+}
 console.error('build', build);
+if (trusted && build !== trusted.build && !process.env.RB_ALLOW_BUILD_UPDATE) {
+  console.error(`refusing to replace pinned build ${trusted.build} with ${build}`);
+  console.error(`restore the pin with RB_BUILD=${trusted.build} node prepare.mjs, or`);
+  console.error('fetch a new build with RB_ALLOW_BUILD_UPDATE=1 node prepare.mjs');
+  console.error('and then update engine/trusted_build.json deliberately.');
+  process.exit(1);
+}
 
 async function get(file) {
   const url = `${base}${file}?v=${build}`;
@@ -55,6 +70,14 @@ const metadata = {
   fetched: new Date().toISOString(),
   files: { 'index.js': sha(js), 'index.wasm': sha(wasm) },
 };
+if (trusted && build === trusted.build) {
+  for (const [file, expected] of Object.entries(trusted.files || {})) {
+    if (metadata.files[file] !== expected) {
+      console.error(`downloaded ${file} does not match the trusted pin (expected ${expected}, got ${metadata.files[file]})`);
+      process.exit(1);
+    }
+  }
+}
 const btmp = path.join(cache, 'build.json.tmp');
 fs.writeFileSync(btmp, JSON.stringify(metadata, null, 2));
 fs.renameSync(btmp, path.join(cache, 'build.json'));

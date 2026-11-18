@@ -589,6 +589,10 @@ pub fn validate_server(value: &str) -> Result<(), String> {
         (host, port)
     };
     if host.is_empty()
+        || (!value.starts_with('[')
+            && !host
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'.' || b == b'-' || b == b'_'))
         || port.is_empty()
         || port.contains(']')
         || !port.bytes().all(|b| b.is_ascii_digit())
@@ -1035,6 +1039,8 @@ mod tests {
         opts.server = Some("[::1]:8080".into());
         assert!(validate_options(&opts).is_ok());
         opts.server = Some("[not-ipv6]:8080".into());
+        assert!(validate_options(&opts).is_err());
+        opts.server = Some("foo/bar:8080".into());
         assert!(validate_options(&opts).is_err());
     }
 

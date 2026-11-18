@@ -7,7 +7,7 @@
     "node": ">=22"
   },
   "scripts": {
-    "prepare": "node prepare.mjs",
+    "assets": "node prepare.mjs",
     "test:room06": "node room06_test.cjs",
     "test:hub": "node hub_test.cjs",
     "test:matchstate": "node matchstate_test.cjs",
