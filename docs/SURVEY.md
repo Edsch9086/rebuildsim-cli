@@ -474,10 +474,10 @@ A later run after the rematch roster-reset change also produced
 A final run after auto-clock gating, room-return packet clearing, and the
 end-state stop produced: `MATCH 2`, room seats 1 at match start, exactly one
 final `end` state, `meMissing 0`, and `unknownFrame 0` across 377 states.
-The final endgame-fuel and results-lifecycle runs on `8f78c6d` and `3b5367a`
-produced: `matches 2 states 377 ends 1 rooms 10`, `meMissing 0`, `unknownFrame
-0`, `fuelOk 377/377`, and `resultsErrors 0`, with the log showing
-`results: back to room`. This confirms the exhaustive all-absent fuel
+The final endgame-fuel and results-lifecycle runs on `8f78c6d`, `3b5367a`, and
+`131a679` produced: `matches 2 states 376-377 ends 1 rooms 10`, `meMissing 0`,
+`unknownFrame 0`, `fuelOk 376-377/376-377`, and `resultsErrors 0`, with the log
+showing `results: back to room`. This confirms the exhaustive all-absent fuel
 verification and the stalled-clock room recovery do not disturb normal play or
 the rematch; the live run exercised the normal results return, while the early
 room-return path is covered by the timestamped latch and cached-room replay.
