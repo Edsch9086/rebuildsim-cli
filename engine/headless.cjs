@@ -421,7 +421,7 @@ function emitRoom() {
     match_active: !!flow.match, seats: roomSeats });
 }
 
-function resetMatchState() {
+function resetMatchState(clearRoster = false) {
   matchStarted = false;
   flow.match = false;
   clockStarted = false;
@@ -458,9 +458,11 @@ function resetMatchState() {
   allianceByName.clear();
   allianceSourceByName.clear();
   ourAllianceCache = null;
-  roomSeats = [];
-  roomNames = new Set();
-  lastRoom06 = null;
+  if (clearRoster) {
+    roomSeats = [];
+    roomNames = new Set();
+    lastRoom06 = null;
+  }
   cancelUiTimers();
   releaseInputs();
   lastMatchTime = null;
@@ -647,7 +649,7 @@ function onMatchStart() {
   // and a second call during the countdown must not wipe the first clock/fuel
   // packets. A new match after an ended/abandoned one (no /room screen) is allowed.
   if (flow.match && !ended && !stale) return;
-  resetMatchState();
+  resetMatchState(false);
   flow.match = true;
   matchStarted = true;
   matchWasActive = true;
@@ -693,7 +695,7 @@ function handleServerFrame(buf, wsId) {
       log('room code changed', roomCode, '->', nextCode);
       clearRoomIdentity();
       lastRoom06 = null;
-      resetMatchState();
+      resetMatchState(false);
     }
     roomCode = nextCode || roomCode;
     if (OPT.code && roomCode && roomCode.toUpperCase() !== OPT.code.toUpperCase()) {
@@ -1602,7 +1604,7 @@ function onTrack(name, params) {
       const matchLive = starting || (flow.match && clockStarted && lastMatchTime != null
         && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500);
       if (!matchLive && (flow.match || matchWasActive)) {
-        resetMatchState();
+        resetMatchState(true);
         emitRoom();
       } else if (matchLive && !roomResetTimer) {
         roomResetTimer = setTimeout(() => {
@@ -1612,7 +1614,7 @@ function onTrack(name, params) {
           if (!stillStarting && flow.match
               && (!last41At || Date.now() - last41At >= 1500)) {
             log('room screen without clock updates; resetting stale match');
-            resetMatchState();
+            resetMatchState(true);
             emitRoom();
           }
         }, 1800);
