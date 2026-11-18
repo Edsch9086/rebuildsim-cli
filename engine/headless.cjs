@@ -357,7 +357,7 @@ let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
-let readyClickPending = false, readyClickTimer = null;
+let readyClickPending = false, readyClickTimer = null, resultsAt = 0;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -375,7 +375,7 @@ let scores = { red: 0, blue: 0 };
 let autoScores = { red: 0, blue: 0 };
 let protocolVersion = null;
 let lastCountdown = null;
-let clockStarted = false, sawAutoClock = false;
+let clockStarted = false, sawAutoClock = false, lastClockChangeAt = 0, last41Clock = null;
 let matchEndTimer = null;
 let ourAllianceCache = null;
 
@@ -438,6 +438,8 @@ function resetMatchState(clearRoster = false) {
   flow.match = false;
   clockStarted = false;
   sawAutoClock = false;
+  lastClockChangeAt = 0;
+  last41Clock = null;
   matchEndScheduled = false;
   if (matchEndTimer) { clearTimeout(matchEndTimer); matchEndTimer = null; }
   readyClicked = false;
@@ -520,6 +522,7 @@ function noteSeatPresence(ours) {
   seatDemoteTimer = setTimeout(() => {
     seatDemoteTimer = null;
     if (!seatMissingSince) return;
+    if (resultsPending) return;
     if (seated && Date.now() - seatMissingSince >= delay) {
       seated = false;
       role = 'spectator';
@@ -711,6 +714,10 @@ function parse41(buf) {
     let t = dv.getFloat32(10, true);
     if (!Number.isFinite(t)) t = null;
     if (t != null && (sawAutoClock || t >= 143.0 || t <= 0.05)) {
+      if (t !== last41Clock) {
+        last41Clock = t;
+        lastClockChangeAt = Date.now();
+      }
       lastMatchTime = t;
       if (t >= 143.0) sawAutoClock = true;
       if (t > 0.05) clockStarted = true;
@@ -728,8 +735,14 @@ function onMatchStart() {
     ? Date.now() - last41At > 1500
     : matchStartedAt && Date.now() - matchStartedAt > 3000);
   if (resultsPending) {
-    log('ignoring match_start while results are pending');
-    return;
+    if (Date.now() - resultsAt < 2000) {
+      log('ignoring duplicate match_start while results are pending');
+      return;
+    }
+    log('new match_start after results; clearing results timers');
+    resultsPending = false;
+    resultsClickScheduled = false;
+    cancelUiTimers();
   }
   // Match start is idempotent per match: /multi/match and match_start both fire,
   // and a second call during the countdown must not wipe the first clock/fuel
@@ -980,7 +993,7 @@ function parseFuelPacket(buf) {
     added++;
   }
   if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
-  if (!fuelAddr && fuelPacket.size) {
+  if (!fuelAddr && fuelPacket.size && [...fuelPacket.values()].some(r => r.count > 0)) {
     const now = Date.now();
     if (now - lastFuelLocate > 250) {
       lastFuelLocate = now;
@@ -1193,6 +1206,11 @@ function scanFuelRun() {
 
 function findFuelArray() {
   if (!mem) return 0;
+  if (![...fuelPacket.values()].some(r => r.count > 0)) {
+    // All known fuel is consumed; keep a previously verified base rather than
+    // locking onto an arbitrary zero region.
+    return fuelAddr;
+  }
   if (fuelAddr) {
     if (verifyFuelBase()) return fuelAddr;
     log('fuel base moved; relocating');
@@ -1679,7 +1697,7 @@ function cancelReadyClick() {
 }
 
 function readyIfNeeded(force = false) {
-  if (matchStarted || uiBusy || readyClickPending) return;
+  if (matchStarted || uiBusy || resultsPending || readyClickPending) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
   if (!force && Date.now() - lastReadyClickAt < 4000) return;
@@ -1701,7 +1719,7 @@ function readyIfNeeded(force = false) {
 }
 
 function clickStartWhenReady(attempt = 0, force = false) {
-  if (!host) return;
+  if (!host || resultsPending) return;
   if (!force && !OPT.start) return;
   if (uiBusy) {
     uiLater(() => clickStartWhenReady(attempt, force), 500);
@@ -1784,8 +1802,10 @@ function onTrack(name, params) {
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
       const starting = flow.match && !clockStarted && matchStartedAt
         && Date.now() - matchStartedAt < 10000;
-      const matchLive = starting
-        || (flow.match && last41At && Date.now() - last41At < 2500);
+      const clockLive = flow.match && clockStarted && lastMatchTime != null
+        && lastMatchTime > 0.05 && lastClockChangeAt
+        && Date.now() - lastClockChangeAt < 3000;
+      const matchLive = starting || clockLive;
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
         lastRoom06 = null;
@@ -1793,10 +1813,19 @@ function onTrack(name, params) {
       } else if (matchLive && !roomResetTimer) {
         const checkRoom = () => {
           roomResetTimer = null;
-          if (!flow.match) return;
+          if (!flow.match) {
+            if (resultsPending || matchWasActive) {
+              resetMatchState(false);
+              lastRoom06 = null;
+              emitRoom();
+            }
+            return;
+          }
           const stillStarting = flow.match && !clockStarted && matchStartedAt
             && Date.now() - matchStartedAt < 10000;
-          const liveNow = flow.match && last41At && Date.now() - last41At < 2500;
+          const liveNow = flow.match && clockStarted && lastMatchTime != null
+            && lastMatchTime > 0.05 && lastClockChangeAt
+            && Date.now() - lastClockChangeAt < 3000;
           if (!stillStarting && !liveNow) {
             log('room screen without a live clock; resetting stale match');
             resetMatchState(false);
@@ -2047,11 +2076,14 @@ setInterval(() => {
     flow.match = false;
     matchStarted = false;
     clockStarted = false;
+    if (seatDemoteTimer) { clearTimeout(seatDemoteTimer); seatDemoteTimer = null; }
+    seatMissingSince = 0;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
     if (!resultsClickScheduled) {
       resultsClickScheduled = true;
       resultsPending = true;
+      resultsAt = Date.now();
       // Results screen: BACK TO THE ROOM is centered at (365, 688).
       uiLater(() => {
         if (resultsPending) { log('results: back to room'); globalThis.__ctl.click(365, 688); }
@@ -2145,7 +2177,7 @@ rl.on('line', (line) => {
   else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') {
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
-    if (ourSeat && ourSeat.ready === false && !matchStarted && !uiBusy) {
+    if (ourSeat && ourSeat.ready === false && !matchStarted && !uiBusy && !resultsPending) {
       readyIfNeeded();
     }
   }
