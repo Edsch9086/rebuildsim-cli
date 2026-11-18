@@ -52,7 +52,7 @@ timeout variants provide a deadline.
 | `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
 | `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
-| `hopper_capacity` | hopper capacity shown by the HUD (55 in this build) |
+| `hopper_capacity` | optional robot hopper capacity; `null` unless `--hopper-capacity` is set |
 | `intake_active` | boolean; true while the intake trigger is held |
 | `hub.active` | `true`/`false` for our hub, `null` when AUTO was tied during a shift |
 | `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
@@ -194,11 +194,13 @@ pub struct Robot {
 ```
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
-name+0x4b. It starts at 8 in the default build (HUD `FUEL 8/55`) and decrements
-while shooting. `hopper_capacity` is `55`; it is a build/HUD constant, not a
-per-robot field. `intake_active` comes from bit 6 of the byte at name+0x56 and
-tracks the intake trigger (true while held). Remote robots may report their
-hopper/intake too, but the local robot's values are the reliable ones.
+name+0x4b and decrements while shooting. Hopper capacity is **robot-specific**
+(the default 359 is 55, other robots range from 0 to 115, and modded robots can
+reach 600), so it is not a build constant. Pass `--hopper-capacity <N>` if your
+bot needs the denominator; otherwise `hopper_capacity` is `null`. `intake_active`
+comes from bit 6 of the byte at name+0x56 and tracks the intake trigger (true
+while held). Remote robots may report their hopper/intake too, but the local
+robot's values are the reliable ones.
 
 There is no separate "shooting" boolean in the player struct: shooting is a
 trigger, the hopper count drops as fuel is fired, and a f32 timer at name+0x4f
@@ -274,7 +276,7 @@ Engine → CLI:
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "scores":{"red":7,"blue":4},"protocol":1,"frame":"alliance","alliance":"red",
  "fuel_count":456,"fuel_ok":true,"fuel_source":"packet",
- "hopper_fuel":8,"hopper_capacity":55,
+ "hopper_fuel":8,"hopper_capacity":55,   // example: --hopper-capacity 55
  "intake_active":false,"hub":{"active":true,"red_active":true,"blue_active":true,
  "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",

@@ -45,7 +45,8 @@ Flags:
 --spawn <S>         reserved; ignored (infer spawn from first pose)
 --server <HOST:PORT> connect to a local server instead of rebuildsim.com
 --gamepad           use the virtual gamepad (analog + action buttons)
---fuel <PCT>        host only: set fuel count rule (25, 50, 75, 100, 125, 150)
+--fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150)
+--hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
 --binary            framed stdout: JSON + packed fuel records
 --field-frame       raw global coordinates (default: alliance-normalized)
 --frame-alliance red|blue  diagnostic override for the output frame (r/b accepted)
@@ -80,7 +81,7 @@ stdout is JSON lines only:
  "time_remaining":158.0,"substage_remaining":15.0,
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "frame":"alliance","alliance":"red","fuel_count":456,
- "hopper_fuel":8,"hopper_capacity":55,"intake_active":false,
+ "hopper_fuel":8,"hopper_capacity":55,"intake_active":false,  // if --hopper-capacity 55
  "hub":{"active":true,"red_active":true,"blue_active":true,
         "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"TestBot","is_me":true,"alliance":"red","alliance_source":"room",
@@ -180,11 +181,12 @@ Playwright.
   per-IP limit).
 - Scores come from `0x41` (`+14` red, `+16` blue, `+18`/`+28` auto) and are
   emitted with the state and as `score` events on change.
-- `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b). It starts
-  at 8 in the default build. `hopper_capacity` is 55 (build/HUD constant), and
-  `intake_active` is bit 6 of name+0x56. No separate shooting boolean or turret
-  angle is exposed; shooting is a trigger and the hopper count is the observable
-  result.
+- `hopper_fuel` is the local robot's hopper count (u32 at name+0x4b).
+  `hopper_capacity` is optional and robot-specific: pass `--hopper-capacity <N>`
+  for the selected robot (default 359 is 55; others range 0–115, modded up to
+  600), otherwise it is `null`. `intake_active` is bit 6 of name+0x56. No separate
+  shooting boolean or turret angle is exposed; shooting is a trigger and the
+  hopper count is the observable result.
 - `hub.active` is our hub (already alliance-normalized); `hub.red_active` /
   `hub.blue_active` are diagnostics. A tied AUTO is reported as `null` during
   shifts because the FMS picks the order; use `--hub-order red|blue` to force it

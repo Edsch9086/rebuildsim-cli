@@ -49,7 +49,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); fourth seat blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
-| Hopper fuel | ✅ count (8 -> 0), capacity 55, intake flag |
+| Hopper fuel | ✅ live count + intake flag; capacity is robot-specific (`--hopper-capacity`, optional) |
 | Hub active/inactive | ✅ computed from clock + AUTO winner; tie reports unknown |
 | Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
@@ -59,7 +59,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Timeouts / disconnect handling | ✅ state watchdog, room-WS exit, lobby restart |
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |
-| Fuel rule (`--fuel`) | ✅ host UI flow; 25% → 150 fuel validated |
+| Fuel rule (`--fuel`) | test-only host UI flow; 25% → 150 fuel validated |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)

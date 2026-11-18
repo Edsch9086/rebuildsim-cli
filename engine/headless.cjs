@@ -262,6 +262,7 @@ const OPT = {
   gamepad: process.argv.includes('--gamepad'),
   server: getArg('server', ''),
   fuel: getArg('fuel', ''),
+  hopperCapacity: getArg('hopper-capacity', ''),
   binary: process.argv.includes('--binary'),
   fieldFrame: process.argv.includes('--field-frame'),
   frameAlliance: getArg('frame-alliance', ''),
@@ -283,7 +284,8 @@ function optionError(error, msg) {
   setTimeout(() => process.exit(2), 100);
 }
 const valueFlags = ['--code', '--username', '--spawn', '--server', '--fuel',
-  '--frame-alliance', '--hub-order', '--expect-build', '--emit-hz', '--asset-dir'];
+  '--hopper-capacity', '--frame-alliance', '--hub-order', '--expect-build',
+  '--emit-hz', '--asset-dir'];
 for (const flag of valueFlags) {
   const i = process.argv.indexOf(flag);
   if (i >= 0 && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith('--'))) {
@@ -319,6 +321,17 @@ if (OPT.fuel) {
     setTimeout(() => process.exit(2), 100);
   }
   log('fuel rule request', OPT.fuel);
+}
+if (OPT.hopperCapacity !== '') {
+  const n = Number(OPT.hopperCapacity);
+  if (!Number.isInteger(n) || n < 0 || n > 65535) {
+    console.error('invalid --hopper-capacity: use 0..65535');
+    try { emit({ type: 'error', error: 'invalid_hopper_capacity' }); } catch {}
+    setTimeout(() => process.exit(2), 100);
+  }
+  OPT.hopperCapacity = n;
+} else {
+  OPT.hopperCapacity = null;
 }
 
 if (OPT.server) {
@@ -1406,7 +1419,7 @@ function readHopper(addr) {
   const a = u8();
   if (addr + 0x4e >= a.length) return null;
   const n = a[addr + 0x4b] | (a[addr + 0x4c] << 8) | (a[addr + 0x4d] << 16) | (a[addr + 0x4e] << 24);
-  return n >= 0 && n <= 255 ? n : null;
+  return n >= 0 && n <= 65535 ? n : null;
 }
 
 let frameBlue = false;
@@ -2129,7 +2142,7 @@ setInterval(() => {
     alliance: activeAlliance() || 'unknown',
     hub,
     hopper_fuel: me ? me.hopper_fuel : null,
-    hopper_capacity: 55,
+    hopper_capacity: OPT.hopperCapacity,
     intake_active: me ? me.intake_active : null,
     fuel_ok: fuelVerified && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
     fuel_source: fuelSource,

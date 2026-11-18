@@ -577,10 +577,11 @@ shift status and `source: "tie"` rather than guessing.
 The local hopper is a u32 at **name+0x4b** in the player struct (and the same
 offset in the render/predicted copy). Memory dumps while holding intake/shoot
 showed the hopper go 8 -> 0 and a flag at **name+0x56 bit 6 (0x40)** turn on
-only while intake is held. The engine emits `hopper_fuel`, `hopper_capacity`
-(55, a build/HUD constant), and `intake_active`. No separate shooting boolean
-or turret angle was isolated: shooting is a trigger, the hopper count drops,
-and a f32 timer at +0x4f changes around the shot.
+only while intake is held. The engine emits `hopper_fuel`, optional
+`hopper_capacity` (robot-specific; supplied with `--hopper-capacity`, no build
+constant), and `intake_active`. No separate shooting boolean or turret angle was
+isolated: shooting is a trigger, the hopper count drops, and a f32 timer at
++0x4f changes around the shot.
 
 ### Scores / time / substages
 

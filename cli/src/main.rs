@@ -31,6 +31,7 @@ struct Args {
     debug: bool,
     keyboard: bool,
     fuel: Option<String>,
+    hopper_capacity: Option<u16>,
     server: Option<String>,
     binary: bool,
     field_frame: bool,
@@ -61,6 +62,7 @@ impl Default for Args {
             debug: false,
             keyboard: false,
             fuel: None,
+            hopper_capacity: None,
             server: None,
             binary: true,
             field_frame: false,
@@ -98,7 +100,8 @@ OPTIONS:
   --watch             print every state (otherwise every 5th)
   --debug             verbose engine logs
   --keyboard          use digital keyboard controls instead of the virtual gamepad
-  --fuel <PCT>        host only: fuel rule (25, 50, 75, 100, 125, 150; % optional)
+  --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150; % optional)
+  --hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -149,6 +152,14 @@ fn parse_args() -> Result<Args, String> {
                     return Err("--fuel must be one of 25, 50, 75, 100, 125, 150".into());
                 }
                 a.fuel = Some(normalized.to_string());
+            }
+            "--hopper-capacity" => {
+                let value = it.next().ok_or("--hopper-capacity needs a value")?;
+                a.hopper_capacity = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| "--hopper-capacity must be 0..65535")?,
+                );
             }
             "--server" => {
                 let value = it.next().ok_or("--server needs a value")?;
@@ -366,6 +377,7 @@ fn main() {
     opts.debug = args.debug;
     opts.gamepad = !args.keyboard;
     opts.fuel = args.fuel.clone();
+    opts.hopper_capacity = args.hopper_capacity;
     opts.server = args.server.clone();
     opts.binary = args.binary;
     opts.field_frame = args.field_frame;

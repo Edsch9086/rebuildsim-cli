@@ -25,6 +25,8 @@ pub struct EngineOptions {
     pub debug: bool,
     pub gamepad: bool,
     pub fuel: Option<String>,
+    /// Optional hopper capacity for the selected robot (0..65535).
+    pub hopper_capacity: Option<u16>,
     pub server: Option<String>,
     pub binary: bool,
     pub field_frame: bool,
@@ -49,6 +51,7 @@ impl EngineOptions {
             debug: false,
             gamepad: true,
             fuel: None,
+            hopper_capacity: None,
             server: None,
             binary: true,
             field_frame: false,
@@ -254,7 +257,7 @@ pub struct GameState {
     /// Our robot's hopper fuel count, if the player struct is readable.
     #[serde(default)]
     pub hopper_fuel: Option<u16>,
-    /// HUD/build hopper capacity (55 in build b654373).
+    /// Robot hopper capacity, if supplied by the caller (`--hopper-capacity`).
     #[serde(default)]
     pub hopper_capacity: Option<u16>,
     /// Our intake flag.
@@ -725,6 +728,9 @@ impl Engine {
         }
         if let Some(fuel) = &opts.fuel {
             cmd.arg("--fuel").arg(fuel);
+        }
+        if let Some(cap) = opts.hopper_capacity {
+            cmd.arg("--hopper-capacity").arg(cap.to_string());
         }
         if let Some(server) = &opts.server {
             cmd.arg("--server").arg(server);
