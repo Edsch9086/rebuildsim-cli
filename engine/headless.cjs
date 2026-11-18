@@ -708,9 +708,9 @@ function parse41(buf) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let t = dv.getFloat32(10, true);
     if (!Number.isFinite(t)) t = null;
-    if (t != null && (sawAutoClock || t > 143.0 || t <= 0.05)) {
+    if (t != null && (sawAutoClock || t >= 143.0 || t <= 0.05)) {
       lastMatchTime = t;
-      if (t > 143.0) sawAutoClock = true;
+      if (t >= 143.0) sawAutoClock = true;
       if (t > 0.05) clockStarted = true;
     } else if (t != null) {
       // A stale positive teleop clock from the previous match must not make
@@ -721,7 +721,7 @@ function parse41(buf) {
 }
 
 function onMatchStart() {
-  const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.5;
+  const ended = flow.match && clockStarted && lastMatchTime != null && lastMatchTime <= 0.05;
   const stale = flow.match && (last41At
     ? Date.now() - last41At > 1500
     : matchStartedAt && Date.now() - matchStartedAt > 3000);
@@ -1210,7 +1210,7 @@ function maybeScanFuel() {
   const now = Date.now();
   if (now - lastFuelScan <= 2000) return;
   lastFuelScan = now;
-  if (!findFuelArray()) lastFuelScan = Date.now() + 2000;
+  if (!findFuelArray()) lastFuelScan = Date.now();
 }
 
 function readFuel() {
@@ -1775,26 +1775,31 @@ function onTrack(name, params) {
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
       const starting = flow.match && !clockStarted && matchStartedAt
-        && Date.now() - matchStartedAt < 10000;
+        && Date.now() - matchStartedAt < 3000;
       const matchLive = starting || (flow.match && clockStarted && lastMatchTime != null
-        && lastMatchTime > 0.05 && last41At && Date.now() - last41At < 1500);
+        && lastMatchTime > 0.5 && last41At && Date.now() - last41At < 2500);
       if (!matchLive && (flow.match || matchWasActive)) {
         resetMatchState(false);
         lastRoom06 = null;
         emitRoom();
       } else if (matchLive && !roomResetTimer) {
-        roomResetTimer = setTimeout(() => {
+        const checkRoom = () => {
           roomResetTimer = null;
+          if (!flow.match) return;
           const stillStarting = flow.match && !clockStarted && matchStartedAt
-            && Date.now() - matchStartedAt < 10000;
-          if (!stillStarting && flow.match
-              && (!last41At || Date.now() - last41At >= 2500)) {
-            log('room screen without clock updates; resetting stale match');
+            && Date.now() - matchStartedAt < 3000;
+          const liveNow = flow.match && clockStarted && lastMatchTime != null
+            && lastMatchTime > 0.5 && last41At && Date.now() - last41At < 2500;
+          if (!stillStarting && !liveNow) {
+            log('room screen without a live clock; resetting stale match');
             resetMatchState(false);
             lastRoom06 = null;
             emitRoom();
+          } else {
+            roomResetTimer = setTimeout(checkRoom, 1000);
           }
-        }, 1800);
+        };
+        roomResetTimer = setTimeout(checkRoom, 1800);
       }
       if (flow.joined && seated && !flow.match && !uiBusy) {
         if (host && OPT.start && !startClicked) {
@@ -2033,6 +2038,8 @@ setInterval(() => {
     // Keep emitting the final/end states, but room events and the CLI should
     // no longer consider this a live match.
     flow.match = false;
+    matchStarted = false;
+    clockStarted = false;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
     if (!resultsClickScheduled) {
