@@ -390,9 +390,11 @@ The `0x21` protocol hello must report version `1`; a mismatch is a hard error
 - After a match the engine clicks `BACK TO THE ROOM` at ~3.5 s, 7.5 s, and
   15 s. If the results screen still has not returned at 20 s it emits
   `results_stuck` and exits `6`. A human can click earlier; pending result-screen
-  clicks are canceled when the room view appears. A room view that arrives
-  before the next state tick is remembered: the engine still emits the final
-  `end` state, then returns to the room without scheduling result clicks.
+  clicks are canceled when the room view appears. A room view during the final
+  second is remembered: the engine still emits the final `end` state, then
+  returns to the room without scheduling result clicks. Replayed room state
+  restores ready flags but never starts a match by itself; host `--start` waits
+  for a fresh room packet, which the room broadcasts periodically.
 - Blue control-frame inversion is implemented and the 4th seat is confirmed
   blue. The 4-client test asserts the four seats, host `me`, robot identities,
   and the normalized frame; it logs blue keyboard movement as observational

@@ -1860,7 +1860,8 @@ function onTrack(name, params) {
           if (resultsPending || resultsClickScheduled) return;
           if (!flow.match) {
             // The match ended or stalled before this check fired. The room
-            // view is already current; clean up and re-arm the host start.
+            // view is already current; restore readiness and let fresh room
+            // packets re-arm the host start.
             if (matchWasActive) returnToRoom();
             return;
           }
