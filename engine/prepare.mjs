@@ -1,6 +1,10 @@
 // Download the current REBUILD Simulator web build into engine/cache/.
 // The game assets are not redistributed with this repo; this fetches the
 // current build at runtime, which keeps the prototype in sync with the server.
+if (Number(process.versions.node.split('.')[0]) < 22) {
+  console.error('Node >=22 is required');
+  process.exit(1);
+}
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';

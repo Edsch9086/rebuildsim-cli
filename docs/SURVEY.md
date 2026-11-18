@@ -192,7 +192,10 @@ Alliance is decoded from the `0x06` room state. Player records appear in seat
 order with the signature `01 <team> <robot-id u16> 02 00 00 <name-len> <name...>`;
 `<team>` is 0 for red and 1 for blue, and the robot id is 359 (`67 01`) for the
 default robot. The client displays at most 10 characters and the engine rejects
-longer names before joining; use 1-10 ASCII characters. A fresh 4-player capture had seats 0–2 red
+longer names before joining; use 1-10 ASCII characters. Seats, team sides,
+robots, and spawn slots can be changed before the match; the team byte is
+authoritative, so the engine re-derives the normalized frame, clears cached
+poses, and re-readies the new seat when `0x06` changes. A fresh 4-player capture had seats 0–2 red
 and seat 3 blue, and the fourth browser client rendered as the blue "YOU" robot.
 `engine/room06.cjs` parses this, the engine sets `alliance_source: "room"`, and
 the first-sight spawn-x heuristic remains only as a fallback when no `0x06` has
