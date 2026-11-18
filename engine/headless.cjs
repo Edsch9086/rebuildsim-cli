@@ -358,7 +358,7 @@ let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let readyClickPending = false, readyClickTimer = null, resultsAt = 0;
-let lastRoomViewAt = 0;
+let earlyRoomSeen = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -448,7 +448,8 @@ function resetMatchState(clearRoster = false) {
   startClicks = 0;
   resultsClickScheduled = false;
   resultsPending = false;
-  lastRoomViewAt = 0;
+  earlyRoomSeen = false;
+  lastRoom06 = null;
   lastReadyClickAt = 0;
   readyClickPending = false;
   readyClickTimer = null;
@@ -739,7 +740,7 @@ function onMatchStart() {
   const lastProgress = lastClockChangeAt || last41At;
   const stale = flow.match && (clockStarted
     ? (lastProgress ? Date.now() - lastProgress > 1500 : true)
-    : matchStartedAt && Date.now() - matchStartedAt > 10000);
+    : matchStartedAt && Date.now() - matchStartedAt > 2500);
   if (resultsPending) {
     // The results screen is not a match. A real rematch can only start after
     // the first back-to-room click at 3.5 s; anything earlier is a duplicate.
@@ -752,15 +753,11 @@ function onMatchStart() {
     resultsClickScheduled = false;
     cancelUiTimers();
   }
-  // Match start is idempotent per match: /multi/match and match_start both fire.
-  // During the countdown a second signal must not wipe clocks/fuel; after the
-  // clock starts, only a genuinely stale/ended match can be replaced.
-  if (flow.match && !clockStarted && matchStartedAt
-      && Date.now() - matchStartedAt < 2500) {
-    log('duplicate match_start during the countdown; keeping state');
-    return;
-  }
+  // Match start is idempotent per match: /multi/match and match_start both
+  // fire within the first couple of seconds. A genuinely new countdown after
+  // that resets the match.
   if (flow.match && !ended && !stale) return;
+  const savedRoom06 = lastRoom06;
   resetMatchState(false);
   flow.match = true;
   matchStarted = true;
@@ -772,7 +769,7 @@ function onMatchStart() {
   startClicked = true;
   // Seat order does not change during a match; re-apply it after the reset
   // cleared the identity maps.
-  if (lastRoom06) applyRoom06(lastRoom06);
+  if (savedRoom06) applyRoom06(savedRoom06);
   emit({ type: 'match', phase: 'countdown', substage: 'prematch',
     time: null, seats: roomSeats });
   if (flow.joined) emitRoom();
@@ -1750,7 +1747,6 @@ function readyIfNeeded(force = false) {
 function returnToRoom() {
   const saved = lastRoom06;
   resetMatchState(false);
-  lastRoom06 = saved;
   if (saved) applyRoom06(saved, true);
   emitRoom();
 }
@@ -1834,7 +1830,6 @@ function onTrack(name, params) {
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
     } else if (path === '/room') {
-      if (flow.match || matchWasActive) lastRoomViewAt = Date.now();
           // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
@@ -1845,14 +1840,17 @@ function onTrack(name, params) {
         && Date.now() - lastClockChangeAt < 3000;
       const clockEnded = flow.match && clockStarted && lastMatchTime != null
         && lastMatchTime <= 0.05;
+      const finalSecond = flow.match && lastMatchTime != null
+        && lastMatchTime <= 1.0;
+      if (finalSecond) earlyRoomSeen = true;
       const matchLive = starting || clockLive;
       if (resultsPending) {
         // Normal results return: the page view is the authoritative room entry.
         returnToRoom();
       } else if (clockEnded) {
-        // A human may click BACK before the next state tick. The timestamped
-        // room latch lets the end tick emit the final state, then return to
-        // the room instead of scheduling result-screen clicks.
+        // A human may click BACK before the next state tick. The final-phase
+        // latch lets the end tick emit the final state, then return to the
+        // room instead of scheduling result-screen clicks.
         log('room view at the final buzzer; deferring to the end tick');
       } else if (!matchLive && (flow.match || matchWasActive)) {
         returnToRoom();
@@ -2149,9 +2147,7 @@ setInterval(() => {
     seatMissingSince = 0;
     log('match ended; room events now report match_active=false');
     if (flow.joined) emitRoom();
-    const earlyRoom = lastRoomViewAt && Date.now() - lastRoomViewAt < 2500
-      && lastRoomViewAt >= (lastClockChangeAt || 0);
-    if (earlyRoom) {
+    if (earlyRoomSeen) {
       log('room view already seen; returning without results clicks');
       // Restore ready flags from the room packet that arrived before the end
       // tick; a join-only bot otherwise has no fresh 0x06 to ready from.
