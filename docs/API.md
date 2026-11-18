@@ -337,9 +337,10 @@ The CLI adds several watchdogs on top of the engine:
   seat cancels the demotion and re-emits a driver room event.
 - Navigating back to the menu/multiplayer screen after joining exits `6`
   (`left_room`) so the orchestrator can restart or rejoin.
-- The engine refuses a `room_join` whose access is not `PRIVATE` unless the
-  test-only `--allow-public` flag is set. Logs contain room codes and player
-  names; treat them as private-lobby diagnostics.
+- The engine refuses a `room_join` whose access is not exactly `PRIVATE`
+  (including a missing access field) unless the test-only `--allow-public` flag
+  is set. Logs contain room codes and player names; treat them as private-lobby
+  diagnostics.
 - `engine/trusted_build.json` pins the build and both asset hashes in the repo.
   `prepare.mjs` does not update it; update it deliberately after verifying a new
   release, or use `--no-build-check` for offline debugging.

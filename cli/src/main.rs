@@ -37,6 +37,7 @@ struct Args {
     hub_order: Option<String>,
     expect_build: Option<String>,
     no_build_check: bool,
+    allow_public: bool,
     state_timeout: u64,
     exit_on_ws_close: bool,
     restart_on_exit: bool,
@@ -66,6 +67,7 @@ impl Default for Args {
             hub_order: None,
             expect_build: None,
             no_build_check: false,
+            allow_public: false,
             state_timeout: 5,
             exit_on_ws_close: true,
             restart_on_exit: false,
@@ -103,6 +105,7 @@ OPTIONS:
   --hub-order <red|blue> force the SHIFT 1 inactive hub (tied AUTO / practice)
   --expect-build <H>  fail fast unless the cached build hash matches H
   --no-build-check    skip the live server BUILD comparison
+  --allow-public      test-only: allow a non-PRIVATE room access
   --state-timeout <S> fail (exit 5) if no state arrives for S seconds in a match (default: 5)
   --allow-ws-close    keep running if the room WebSocket closes (default: exit 6)
   --restart-on-exit   rejoin the lobby after a disconnect (join mode only)
@@ -169,6 +172,7 @@ fn parse_args() -> Result<Args, String> {
                 a.expect_build = Some(value);
             }
             "--no-build-check" => a.no_build_check = true,
+            "--allow-public" => a.allow_public = true,
             "--state-timeout" => {
                 a.state_timeout = it
                     .next()
@@ -368,6 +372,7 @@ fn main() {
     opts.hub_order = args.hub_order.clone();
     opts.expect_build = args.expect_build.clone();
     opts.no_build_check = args.no_build_check;
+    opts.allow_public = args.allow_public;
 
     eprintln!("engine: {}", args.engine.display());
     let mut engine = spawn_engine(&opts);

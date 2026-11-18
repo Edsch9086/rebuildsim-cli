@@ -52,7 +52,7 @@ Flags:
 --hub-order red|blue  force the SHIFT-1 inactive hub (tied AUTO/testing)
 --expect-build H    fail fast (exit 3) unless cache/build.json matches H
 --no-build-check    skip the trusted/live BUILD checks (offline debugging)
---allow-public      test-only: permit a non-PRIVATE room_join access
+--allow-public      test-only: permit a non-PRIVATE or missing room_join access
 --emit-hz <N>       state rate (1..60, default 10)
 --debug             verbose engine logs
 --wslog             capture WebSocket frames for dumpws (also on with --debug)

@@ -355,6 +355,7 @@ let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
+let readyClickPending = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
 let roomResetTimer = null, seatDemoteTimer = null, seatMissingSince = 0, last41At = 0;
@@ -442,6 +443,8 @@ function resetMatchState(clearRoster = false) {
   resultsClickScheduled = false;
   resultsPending = false;
   lastReadyClickAt = 0;
+  readyClickPending = false;
+  shrinkKey = null;
   seatsKey = '';
   matchWasActive = false;
   matchStartedAt = 0;
@@ -541,20 +544,30 @@ function applyRoom06(buf) {
     }
     return false;
   }
+  const prevOurs = roomSeats.find(s => s.name === OPT.username);
+  const nextOurs = parsed.seats.find(s => s.name === OPT.username);
+  const ourSeatChanged = (!!prevOurs !== !!nextOurs)
+    || (prevOurs && nextOurs && (prevOurs.team_flag !== nextOurs.team_flag
+      || prevOurs.robot_id !== nextOurs.robot_id || prevOurs.seat !== nextOurs.seat));
   const rosterChanged = roomSeats.length !== parsed.seats.length
     || roomSeats.some(old => {
       const cur = parsed.seats.find(s => s.name === old.name);
       return !cur || cur.team_flag !== old.team_flag
         || cur.robot_id !== old.robot_id || cur.seat !== old.seat;
     });
-  if (rosterChanged && !matchStarted) {
-    // A pre-match seat/robot/slot move invalidates cached poses and readiness.
+  const playStarted = matchStarted && clockStarted;
+  if (rosterChanged && !playStarted) {
+    // A pre-clock seat/robot/slot move invalidates cached poses; only our own
+    // seat change should reset the READY throttle.
     log('room roster/slot changed; clearing pose caches');
     poseCache.clear();
     poseMissUntil.clear();
     lastPose.clear();
-    readyClicked = false;
-    lastReadyClickAt = 0;
+    if (ourSeatChanged) {
+      readyClicked = false;
+      lastReadyClickAt = 0;
+      readyClickPending = false;
+    }
   }
   if (roomSeats.length) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
@@ -566,7 +579,7 @@ function applyRoom06(buf) {
       noteSeatPresence(false);
       return false;
     }
-    if (matchStarted) {
+    if (matchStarted && clockStarted) {
       const byName = new Map(parsed.seats.map(s => [s.name, s]));
       for (const old of roomSeats) {
         const cur = byName.get(old.name);
@@ -628,7 +641,7 @@ function applyRoom06(buf) {
   }
   if (flow.joined) {
     const ours = roomSeats.some(s => s.name === OPT.username);
-    if (matchStarted && seated && !ours) {
+    if (matchStarted && clockStarted && seated && !ours) {
       log('seat missing during match; debouncing');
       noteSeatPresence(false);
       return false;
@@ -928,7 +941,10 @@ function parseFuelPacket(buf) {
   if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
   if (!fuelAddr && fuelPacket.size) {
     const now = Date.now();
-    if (now - lastFuelLocate > 250) { lastFuelLocate = now; locateFuelFromPacket(); }
+    if (now - lastFuelLocate > 250) {
+      lastFuelLocate = now;
+      if (!locateFuelFromPacket()) lastFuelLocate = now + 2000;
+    }
   }
 }
 
@@ -1574,15 +1590,19 @@ function tapBox(index, x, y, text) {
 }
 
 function readyIfNeeded(force = false) {
-  if (matchStarted || uiBusy) return;
+  if (matchStarted || uiBusy || readyClickPending) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
   if (!force && Date.now() - lastReadyClickAt < 4000) return;
-  lastReadyClickAt = Date.now();
-  readyClicked = true;
+  readyClickPending = true;
+  const scheduledAt = Date.now();
   uiLater(() => {
+    readyClickPending = false;
+    if (lastReadyClickAt > scheduledAt) return;
     const cur = roomSeats.find(s => s.name === OPT.username);
     if (cur && cur.ready === false && !matchStarted && !uiBusy) {
+      lastReadyClickAt = Date.now();
+      readyClicked = true;
       globalThis.__ctl.click(646, 688);
     } else if (uiBusy) {
       lastReadyClickAt = 0;
@@ -1732,8 +1752,8 @@ function onTrack(name, params) {
     seated = p.role === 'driver';
     role = p.role;
     const access = String(p.access || '').toUpperCase();
-    if (!OPT.allowPublic && access && access !== 'PRIVATE') {
-      log('room access is', access, '; refusing a non-private lobby');
+    if (!OPT.allowPublic && access !== 'PRIVATE') {
+      log('room access is', access || '(missing)', '; refusing a non-private lobby');
       emit({ type: 'error', error: 'public_room', detail: access });
       setTimeout(() => process.exit(2), 100);
       return;
@@ -2035,10 +2055,8 @@ rl.on('line', (line) => {
   else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') {
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
-    if (ourSeat && ourSeat.ready === false && Date.now() - lastReadyClickAt > 4000) {
-      readyClicked = true;
-      lastReadyClickAt = Date.now();
-      globalThis.__ctl.click(646, 688);
+    if (ourSeat && ourSeat.ready === false && !matchStarted && !uiBusy) {
+      readyIfNeeded(true);
     }
   }
   else if (cmd.type === 'start') clickStartWhenReady(0, true);

@@ -31,6 +31,8 @@ pub struct EngineOptions {
     pub hub_order: Option<String>,
     pub expect_build: Option<String>,
     pub no_build_check: bool,
+    /// Test-only: allow a room whose 0x06 access is not PRIVATE.
+    pub allow_public: bool,
 }
 
 impl EngineOptions {
@@ -53,6 +55,7 @@ impl EngineOptions {
             hub_order: None,
             expect_build: None,
             no_build_check: false,
+            allow_public: false,
         }
     }
 }
@@ -736,6 +739,9 @@ impl Engine {
         }
         if opts.no_build_check {
             cmd.arg("--no-build-check");
+        }
+        if opts.allow_public {
+            cmd.arg("--allow-public");
         }
         cmd.arg("--exit-on-stdin-close");
         cmd.arg("--emit-hz").arg(opts.emit_hz.to_string());
