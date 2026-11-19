@@ -40,16 +40,17 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | --- | --- |
 | Headless wasm boot in Node | ✅ works |
 | Live server handshake + room list | ✅ works |
-| Create room / join room by code | ✅ works |
+| Create room / join room by code | ✅ name/room-code UI retried; join timeout still applies |
 | Ready / start match | ✅ joiner auto-ready; test host can start |
 | Fuel positions from wasm memory | ✅ dynamic count (1..~4300), packet-matched base |
 | Fuel positions from server packets | ✅ `0x42` decoded |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
+| Robot heading | ✅ chassis yaw; `turret_heading` exposed separately |
 | Robot identity | ✅ `me` + `is_me` by username (1-10 ASCII) |
 | Alliance-normalized poses | ✅ red/blue get the same coordinate frame |
 | Seat/alliance from `0x06` | ✅ team flag (red=0/blue=1); fourth seat blue confirmed |
 | Scores / time / substages | ✅ `0x41` scores + full substage table |
-| Hopper fuel | ✅ live count + intake flag; capacity is robot-specific (`--hopper-capacity`, optional) |
+| Hopper fuel | ✅ live count + intake flag; capacity read from the robot definition (359=55, 4414=110, 2910 V2=50) |
 | Hub active/inactive | ✅ computed from clock + AUTO winner; tie reports unknown |
 | Binary fuel channel | ✅ `--binary` packed frames; Rust reattaches |
 | Input packet (`0x40`) | ✅ axes + action bits decoded |
@@ -60,6 +61,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Spawnpoint selection | ⏸ dropped for now (infer from spawn pose) |
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | test-only host UI flow; 25% → 150 fuel validated |
+| Robot selection | ✅ `--robot <id>` after join (0x07 replay; game default variant, e.g. 2910 V2) |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
@@ -90,7 +92,25 @@ cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot
 
 # test-only: create/start a private room and run the axis diagnostic
 cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --demo
+
+# select a robot after joining (the game's default variant for that id)
+cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --robot 4414
 ```
+
+## Nix
+
+A `flake.nix` provides a dev shell (`rustc`, `cargo`, clippy, rustfmt,
+rust-analyzer, Node 22, `jq`, `curl`) and a `rebuildsim-cli` package:
+
+```bash
+nix develop                  # toolchain shell
+nix build                    # ./result/bin/rebuildsim-cli
+nix run . -- --code <LOBBY> --username MyBot
+```
+
+The game assets are not in the Nix store. Download them in the checkout with
+`node engine/prepare.mjs` before running; the default engine path and
+`RB_ASSET_DIR` still work as described above.
 
 If the engine assets live somewhere else, pass `--asset-dir <DIR>` or set
 `RB_ASSET_DIR`. The engine uses the current build downloaded by `prepare.mjs`.

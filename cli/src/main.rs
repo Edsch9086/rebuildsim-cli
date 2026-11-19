@@ -32,6 +32,7 @@ struct Args {
     keyboard: bool,
     fuel: Option<String>,
     hopper_capacity: Option<u16>,
+    robot: Option<u16>,
     server: Option<String>,
     binary: bool,
     field_frame: bool,
@@ -63,6 +64,7 @@ impl Default for Args {
             keyboard: false,
             fuel: None,
             hopper_capacity: None,
+            robot: None,
             server: None,
             binary: true,
             field_frame: false,
@@ -102,6 +104,7 @@ OPTIONS:
   --keyboard          use digital keyboard controls instead of the virtual gamepad
   --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150; % optional)
   --hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
+  --robot <ID>        select this robot/team id in the room before ready
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -160,6 +163,17 @@ fn parse_args() -> Result<Args, String> {
                         .parse::<u16>()
                         .map_err(|_| "--hopper-capacity must be 0..65535")?,
                 );
+            }
+            "--robot" => {
+                let value = it.next().ok_or("--robot needs a value")?;
+                a.robot = Some(
+                    value
+                        .parse::<u16>()
+                        .map_err(|_| "--robot must be a robot id (1..65535)")?,
+                );
+                if a.robot == Some(0) {
+                    return Err("--robot must be a robot id (1..65535)".into());
+                }
             }
             "--server" => {
                 let value = it.next().ok_or("--server needs a value")?;
@@ -378,6 +392,7 @@ fn main() {
     opts.gamepad = !args.keyboard;
     opts.fuel = args.fuel.clone();
     opts.hopper_capacity = args.hopper_capacity;
+    opts.robot = args.robot;
     opts.server = args.server.clone();
     opts.binary = args.binary;
     opts.field_frame = args.field_frame;

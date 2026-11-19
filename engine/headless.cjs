@@ -228,8 +228,8 @@ globalThis.AudioContext = undefined; globalThis.webkitAudioContext = undefined;
 globalThis.VideoEncoder = undefined; globalThis.VideoFrame = undefined; globalThis.AudioEncoder = undefined;
 globalThis.Notification = undefined;
 globalThis.rbTrack = (n, p) => { if (!String(n).startsWith('settings_snapshot')) log('TRACK', n, typeof p === 'string' ? p.slice(0,200) : JSON.stringify(p||{}).slice(0,200)); }; globalThis.rbUserProperty = () => {}; globalThis.rbLoaded = () => {};
-globalThis.rbFieldsTaken = () => {}; globalThis.placeTextBoxes = (v) => log('PLACE BOXES', v); globalThis.placeFields = (v) => log('PLACE FIELDS', v);
-globalThis.rbFieldValue = () => {}; globalThis.placeLinks = () => {}; globalThis.rbTypedInto = () => false;
+globalThis.rbFieldsTaken = () => {}; globalThis.placeTextBoxes = (v) => log('PLACE BOXES', v); globalThis.placeFields = (v) => log('PLACE FIELDS', v); globalThis.placeLinks = () => {};
+globalThis.rbFieldValue = () => {}; globalThis.rbTypedInto = () => false;
 globalThis.rbActions = {};
 globalThis.fetch = async (url) => String(url).includes('/rbq/') ? new Response('', { status: 204 }) : new Response(new Uint8Array(), { status: 200 });
 globalThis.WebGLRenderingContext = class { static [Symbol.hasInstance]() { return false; } };
@@ -263,6 +263,7 @@ const OPT = {
   server: getArg('server', ''),
   fuel: getArg('fuel', ''),
   hopperCapacity: getArg('hopper-capacity', ''),
+  robot: getArg('robot', ''),
   binary: process.argv.includes('--binary'),
   fieldFrame: process.argv.includes('--field-frame'),
   frameAlliance: getArg('frame-alliance', ''),
@@ -284,8 +285,8 @@ function optionError(error, msg) {
   setTimeout(() => process.exit(2), 100);
 }
 const valueFlags = ['--code', '--username', '--spawn', '--server', '--fuel',
-  '--hopper-capacity', '--frame-alliance', '--hub-order', '--expect-build',
-  '--emit-hz', '--asset-dir'];
+  '--hopper-capacity', '--robot', '--frame-alliance', '--hub-order',
+  '--expect-build', '--emit-hz', '--asset-dir'];
 for (const flag of valueFlags) {
   const i = process.argv.indexOf(flag);
   if (i >= 0 && (i + 1 >= process.argv.length || process.argv[i + 1].startsWith('--'))) {
@@ -321,6 +322,17 @@ if (OPT.fuel) {
     setTimeout(() => process.exit(2), 100);
   }
   log('fuel rule request', OPT.fuel);
+}
+if (OPT.robot !== '') {
+  const n = Number(OPT.robot);
+  if (!Number.isInteger(n) || n < 1 || n > 65535) {
+    console.error('invalid --robot: use a robot id (1..65535)');
+    try { emit({ type: 'error', error: 'invalid_robot' }); } catch {}
+    setTimeout(() => process.exit(2), 100);
+  }
+  OPT.robot = n;
+} else {
+  OPT.robot = null;
 }
 if (OPT.hopperCapacity !== '') {
   const n = Number(OPT.hopperCapacity);
@@ -365,12 +377,14 @@ if (OPT.server) {
 }
 
 const wslog = [];
+let lastSeatPacket = null, lastRoomSocket = null;
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
 let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
 let readyClickPending = false, readyClickTimer = null, resultsAt = 0;
+let robotSelecting = false, lastRobotSelectAt = 0, robotSelectFails = 0, robotFailReported = false;
 let earlyRoomSeen = false;
 let lastReadyClickAt = 0;
 let matchWasActive = false;
@@ -646,6 +660,8 @@ function applyRoom06(buf, cached = false) {
     if (ourSeatChanged) {
       readyClicked = false;
       lastReadyClickAt = 0;
+      startClicked = false;
+      startClicks = 0;
       cancelReadyClick();
     }
   }
@@ -701,13 +717,16 @@ function applyRoom06(buf, cached = false) {
     if (ourSeat && ourSeat.ready === true) readyClicked = true;
     if (!resultsPending) {
       readyIfNeeded();
+      const ourSeatNow = roomSeats.find(s => s.name === OPT.username);
       if (!cached && host && OPT.start && !startClicked && !matchStarted && !uiBusy
-          && roomSeats.length && roomSeats.every(s => s.ready === true)) {
+          && roomSeats.length && roomSeats.every(s => s.ready === true)
+          && (OPT.robot == null || (ourSeatNow && ourSeatNow.robot_id === OPT.robot))) {
         startClicked = true;
         uiLater(() => clickStartWhenReady(0), 1000);
       }
     }
   }
+  maybeSelectRobot();
   return true;
 }
 
@@ -902,6 +921,12 @@ globalThis.WebSocket = class extends NativeWS {
       else if (data instanceof ArrayBuffer) buf = Buffer.from(data);
       else if (ArrayBuffer.isView(data)) buf = Buffer.from(data.buffer, data.byteOffset, data.byteLength);
       if (buf) {
+        if (buf[0] === 0x07) {
+          lastSeatPacket = Buffer.from(buf);
+          lastRoomSocket = this;
+          if (globalThis.__RB_DEBUG) log('SEAT07', buf.toString('hex'));
+          setTimeout(() => { if (robotSelectionPending()) maybeSelectRobot(); }, 1200);
+        }
         if (wslogEnabled) {
           wslog.push({ dir: 'send', len: buf.length, hex: buf.toString('hex'), t: Date.now() });
           if (wslog.length > 20000) wslog.splice(0, 10000);
@@ -1330,13 +1355,13 @@ function findPose(name) {
     if (!cachedName.equals(nameBuf) || a[cached + nameLen] !== 0) {
       poseCache.delete(name);
     } else {
-    const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x23);
-    const heading = f32(cached + 0x3f), valid = f32(cached + 0x57);
+    const x = f32(cached + 0x1b), y = f32(cached + 0x1f), z = f32(cached + 0x43);
+    const heading = f32(cached + 0x23), turret = f32(cached + 0x3f), valid = f32(cached + 0x57);
     if (Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
-        && Number.isFinite(heading) && Math.abs(z) < 5
-        && inField(x, y) && Math.abs(heading) <= 20 && valid === 1) {
+        && Number.isFinite(heading) && Number.isFinite(turret) && Math.abs(z) < 5
+        && inField(x, y) && Math.abs(heading) <= 20 && Math.abs(turret) <= 20 && valid === 1) {
       poseMissUntil.delete(name);
-      return { x, y, z, heading, addr: cached, source: (cached >= 0x500000 && cached < 0x530000) ? 'predicted' : 'acked' };
+      return { x, y, z, heading, turret, addr: cached, source: (cached >= 0x500000 && cached < 0x530000) ? 'predicted' : 'acked' };
     }
     }
     poseCache.delete(name);
@@ -1355,15 +1380,17 @@ function findPose(name) {
     if (occ + nameLen >= a.length || a[occ + nameLen] !== 0) continue;
     const x = f32(occ + 0x1b);
     const y = f32(occ + 0x1f);
-    const z = f32(occ + 0x23);
-    const heading = f32(occ + 0x3f);
+    const z = f32(occ + 0x43);
+    const heading = f32(occ + 0x23);
+    const turret = f32(occ + 0x3f);
     const valid = f32(occ + 0x57);
     if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(z)
-        || !Number.isFinite(heading) || Math.abs(z) >= 5) continue;
+        || !Number.isFinite(heading) || !Number.isFinite(turret) || Math.abs(z) >= 5) continue;
     if (!inField(x, y)) continue;
     if (Math.abs(heading) > 20) continue;
+    if (Math.abs(turret) > 20) continue;
     if (valid !== 1) continue;
-    candidates.push({ x, y, z, heading, addr: occ });
+    candidates.push({ x, y, z, heading, turret, addr: occ });
   }
   if (!candidates.length) {
     poseMissUntil.set(name, Date.now() + 1000);
@@ -1422,6 +1449,56 @@ function readHopper(addr) {
   return n >= 0 && n <= 65535 ? n : null;
 }
 
+// Robot definitions are a sorted array of 0x384-byte records. The record
+// starts with the u32 robot id and carries hopper capacity at +0x34 (a u32).
+// Find it by id once and cache it; a sanity check on the neighboring stats
+// avoids matching the id in unrelated data.
+const robotCapacityCache = new Map();
+function readRobotCapacity(robotId, robotClass = 0) {
+  if (!mem || !robotId) return null;
+  const cacheKey = `${robotId}:${robotClass}`;
+  if (robotCapacityCache.has(cacheKey)) return robotCapacityCache.get(cacheKey);
+  const a = u8();
+  const buf = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
+  const pat = Buffer.alloc(4);
+  pat.writeUInt32LE(robotId, 0);
+  const hits = [];
+  let pos = 0;
+  while (true) {
+    const addr = buf.indexOf(pat, pos);
+    if (addr < 0) break;
+    pos = addr + 1;
+    if (addr < 0x10000 || addr + 0x40 > a.length) continue;
+    hits.push(addr);
+  }
+  // The robot definition array lives in the 0x400000..0x420000 heap region
+  // for this build; other copies can be packet buffers or unrelated data.
+  const ordered = hits.filter(x => x >= 0x400000 && x < 0x420000)
+    .concat(hits.filter(x => x < 0x400000 || x >= 0x420000));
+  const valid = [];
+  for (const addr of ordered) {
+    const cap = buf.readUInt32LE(addr + 0x34);
+    if (cap > 600) continue;
+    const fire = f32(addr + 0x38);
+    const move = f32(addr + 0x3c);
+    if (!(fire >= 0 && fire <= 200) || !(move >= 0 && move <= 10)) continue;
+    valid.push({ addr, cap });
+  }
+  if (!valid.length) {
+    robotCapacityCache.set(cacheKey, null);
+    return null;
+  }
+  // The 0x06 class byte selects the robot variant: 0/1 = first record,
+  // 2/3 = second (e.g. 2910 V2 = 50, 359 = 55), and so on.
+  const variant = Math.min(Math.max(0, Math.floor((Number(robotClass) || 0) / 2)),
+    valid.length - 1);
+  const found = valid[variant];
+  robotCapacityCache.set(cacheKey, found.cap);
+  log('robot capacity', robotId, 'class', robotClass, 'variant', variant,
+    found.cap, 'at 0x' + found.addr.toString(16));
+  return found.cap;
+}
+
 let frameBlue = false;
 function refreshFrame() {
   const alliance = activeAlliance();
@@ -1459,6 +1536,7 @@ function readRobots() {
         pose_source: 'stale',
         x: +sp.x.toFixed(4), y: +sp.y.toFixed(4), z: +prev.z.toFixed(4),
         heading: +allianceHeading(prev.heading).toFixed(4),
+        turret_heading: +allianceHeading(prev.turret ?? prev.heading).toFixed(4),
         vx: 0, vy: 0, vz: 0, yawRate: 0,
         hopper_fuel: prev.hopper_fuel ?? null,
         intake_active: prev.intake_active ?? null,
@@ -1478,7 +1556,7 @@ function readRobots() {
     }
     const hopperFuel = readHopper(p.addr);
     const intakeActive = readIntake(p.addr);
-    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading,
+    lastPose.set(name, { t: now, x: p.x, y: p.y, z: p.z, heading: p.heading, turret: p.turret,
       hopper_fuel: hopperFuel, intake_active: intakeActive });
     let alliance = allianceByName.get(name);
     if (!alliance) {
@@ -1495,6 +1573,7 @@ function readRobots() {
       pose_source: p.source || 'unknown',
       x: +op.x.toFixed(4), y: +op.y.toFixed(4), z: +p.z.toFixed(4),
       heading: +allianceHeading(p.heading).toFixed(4),
+      turret_heading: +allianceHeading(p.turret).toFixed(4),
       vx: +ov.x.toFixed(3), vy: +ov.y.toFixed(3),
       vz: +vz.toFixed(3), yawRate: +yawRate.toFixed(3),
       hopper_fuel: hopperFuel,
@@ -1736,9 +1815,10 @@ function cancelReadyClick() {
 }
 
 function readyIfNeeded(force = false) {
-  if (matchStarted || uiBusy || resultsPending || readyClickPending) return;
+  if (matchStarted || uiBusy || resultsPending || readyClickPending || robotSelecting) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
+  if (OPT.robot != null && seat.robot_id !== OPT.robot && robotSelectFails < 3) return;
   if (!force && Date.now() - lastReadyClickAt < 4000) return;
   readyClickPending = true;
   const scheduledAt = Date.now();
@@ -1765,7 +1845,16 @@ function returnToRoom() {
 }
 
 function clickStartWhenReady(attempt = 0, force = false) {
-  if (!host || resultsPending || flow.match || matchStarted) return;
+  if (!host || resultsPending || flow.match || matchStarted || robotSelecting) {
+    startClicked = false;
+    return;
+  }
+  const ourSeat = roomSeats.find(s => s.name === OPT.username);
+  if (OPT.robot != null && ourSeat && ourSeat.robot_id !== OPT.robot
+      && robotSelectFails < 3) {
+    startClicked = false;
+    return;
+  }
   if (!force && !OPT.start) return;
   if (uiBusy) {
     uiLater(() => clickStartWhenReady(attempt, force), 500);
@@ -1802,7 +1891,68 @@ function clickStartWhenReady(attempt = 0, force = false) {
   uiLater(() => clickStartWhenReady(attempt + 1, force), 500);
 }
 
-const flow = { booted: false, menu: false, name: false, rooms: false, joined: false, match: false };
+function robotSelectionPending() {
+  if (OPT.robot == null || matchStarted || flow.match || !flow.joined || !seated) return false;
+  const seat = roomSeats.find(s => s.name === OPT.username);
+  return !!seat && seat.robot_id !== OPT.robot;
+}
+
+function sendRobotSelection(id) {
+  if (!lastSeatPacket || lastSeatPacket.length < 14) return false;
+  if (!lastRoomSocket || lastRoomSocket.readyState !== 1) return false;
+  const pkt = Buffer.from(lastSeatPacket);
+  pkt.writeUInt16LE(id, 3);
+  log('send robot selection', id, pkt.toString('hex'), 'ready', lastRoomSocket.readyState);
+  const ab = pkt.buffer.slice(pkt.byteOffset, pkt.byteOffset + pkt.byteLength);
+  try {
+    lastRoomSocket.send(ab);
+  } catch (e) {
+    log('robot selection send error', String(e));
+    return false;
+  }
+  return true;
+}
+
+function maybeSelectRobot() {
+  if (!robotSelectionPending() || robotSelecting || uiBusy) return;
+  if (robotSelectFails >= 3 || Date.now() - lastRobotSelectAt < 5000) return;
+  lastRobotSelectAt = Date.now();
+  robotSelecting = true;
+  cancelReadyClick();
+  if (!sendRobotSelection(OPT.robot)) {
+    robotSelecting = false;
+    robotSelectFails++;
+    lastRobotSelectAt = 0;
+    log('robot selection packet unavailable; attempt', robotSelectFails);
+    if (robotSelectFails >= 3 && !robotFailReported) {
+      robotFailReported = true;
+      emit({ type: 'error', error: 'robot_select_failed',
+        detail: 'no seat/robot selection packet captured' });
+    }
+    return;
+  }
+  uiLater(() => {
+    robotSelecting = false;
+    const cur = roomSeats.find(s => s.name === OPT.username);
+    if (cur && cur.robot_id === OPT.robot) {
+      robotSelectFails = 0;
+      robotFailReported = false;
+      log('robot selected', OPT.robot);
+    } else {
+      robotSelectFails++;
+      log('robot selection not confirmed; current', cur && cur.robot_id,
+        'attempts', robotSelectFails);
+      if (robotSelectFails >= 3 && !robotFailReported) {
+        robotFailReported = true;
+        emit({ type: 'error', error: 'robot_select_failed',
+          detail: `wanted ${OPT.robot}, room reports ${cur && cur.robot_id}` });
+      }
+    }
+    uiLater(() => readyIfNeeded(), 800);
+  }, 2500);
+}
+
+const flow = { booted: false, menu: false, name: false, rooms: false, joined: false, match: false, robotPicker: false };
 const uiTimers = new Set();
 let uiGeneration = 0;
 function uiLater(fn, ms) {
@@ -1818,6 +1968,37 @@ function cancelUiTimers() {
   uiTimers.clear();
   uiGeneration++;
   uiBusy = false;
+}
+let nameAttempts = 0, joinAttempts = 0;
+function enterName() {
+  if (flow.rooms || flow.joined || joinFatal || spectatorFatal) return;
+  if (nameAttempts++ >= 4) return;
+  tapBox(0, 640, 270, OPT.username);
+  uiLater(() => {
+    if (flow.rooms || flow.joined || joinFatal) return;
+    globalThis.__ctl.click(640, 326);
+    uiLater(enterName, 1500);
+  }, 400);
+}
+function enterRoom() {
+  if (flow.joined || joinFatal || spectatorFatal) return;
+  if (!flow.rooms) { uiLater(enterRoom, 500); return; }
+  if (joinAttempts++ >= 6) { log('join attempts exhausted'); return; }
+  if (OPT.code) {
+    tapBox(1, 218, 274, OPT.code);
+    uiLater(() => {
+      if (flow.joined || joinFatal) return;
+      globalThis.__ctl.click(410, 274);
+      uiLater(enterRoom, 1500);
+    }, 300);
+  } else if (OPT.create) {
+    globalThis.__ctl.click(280, 198);
+    uiLater(enterRoom, 1500);
+  } else {
+    log('no --code or --create; refusing to open a public room');
+    emit({ type: 'error', error: 'missing_join_mode' });
+    setTimeout(() => process.exit(2), 100);
+  }
 }
 function onTrack(name, params) {
   let p = params;
@@ -1836,13 +2017,14 @@ function onTrack(name, params) {
       setTimeout(() => globalThis.__ctl.click(1070, 244), 400);
     } else if (path === '/multiplayer' && !flow.name) {
       flow.name = true;
-      setTimeout(() => {
-        tapBox(0, 640, 270, OPT.username);
-        setTimeout(() => globalThis.__ctl.click(640, 326), 500);
-      }, 400);
+      enterName();
     } else if (path === '/multiplayer' && flow.name && !flow.rooms) {
       // name prompt completed, room list is visible
+    } else if (path === '/robot' || path === '/multi/robot_picker') {
+      flow.robotPicker = true;
+      log('robot picker open');
     } else if (path === '/room') {
+      flow.robotPicker = false;
           // A room screen normally means the previous match ended or was left.
       // If the clock is still advancing, this is a stale page_view: ignore it.
       // If 0x41 stops arriving (aborted match/leave), reset after a short grace.
@@ -1900,31 +2082,19 @@ function onTrack(name, params) {
       // Host START is armed by fresh room packets in applyRoom06; do not arm
       // it from a page view alone, which may still show stale all-ready data.
       if (OPT.debug) log('room screen');
+      maybeSelectRobot();
     } else if (path === '/multi/match') {
       onMatchStart();
     }
   }
   if (name === 'name_prompt' && !flow.name) {
     flow.name = true;
-    setTimeout(() => {
-      tapBox(0, 640, 270, OPT.username);
-      setTimeout(() => globalThis.__ctl.click(640, 326), 500);
-    }, 300);
+    enterName();
   }
   if (name === 'room_list' && !flow.rooms) {
     flow.rooms = true;
-    setTimeout(() => {
-      if (OPT.code) {
-        tapBox(1, 218, 274, OPT.code);
-        setTimeout(() => globalThis.__ctl.click(410, 274), 400);
-      } else if (OPT.create) {
-        globalThis.__ctl.click(280, 198);
-      } else {
-        log('no --code or --create; refusing to open a public room');
-        emit({ type: 'error', error: 'missing_join_mode' });
-        setTimeout(() => process.exit(2), 100);
-      }
-    }, 300);
+    joinAttempts = 0;
+    enterRoom();
   }
   if (name === 'room_join') {
     const previousRole = role;
@@ -2142,7 +2312,7 @@ setInterval(() => {
     alliance: activeAlliance() || 'unknown',
     hub,
     hopper_fuel: me ? me.hopper_fuel : null,
-    hopper_capacity: OPT.hopperCapacity,
+    hopper_capacity: (() => { const our = roomSeats.find(s => s.name === OPT.username); return (our && readRobotCapacity(our.robot_id, our.robot_class)) ?? OPT.hopperCapacity; })(),
     intake_active: me ? me.intake_active : null,
     fuel_ok: fuelVerified && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
     fuel_source: fuelSource,
@@ -2245,6 +2415,7 @@ rl.on('line', (line) => {
   let cmd;
   try { cmd = JSON.parse(s); } catch { log('bad command', s); return; }
   if (cmd.type === 'input') applyInput(cmd);
+  else if (cmd.type === 'click') globalThis.__ctl.click(Number(cmd.x) || 0, Number(cmd.y) || 0);
   else if (cmd.type === 'pad') {
     if (Array.isArray(cmd.axes)) for (let i = 0; i < Math.min(pad.axes.length, cmd.axes.length); i++) pad.axes[i] = Number(cmd.axes[i]) || 0;
     if (Array.isArray(cmd.buttons)) for (let i = 0; i < Math.min(pad.buttons.length, cmd.buttons.length); i++) {
@@ -2259,6 +2430,62 @@ rl.on('line', (line) => {
   }
   else if (cmd.type === 'trace') startTrace(cmd);
   else if (cmd.type === 'dump06') { if (lastRoom06) fs.writeFileSync(cmd.path || '/tmp/opencode/room06.bin', lastRoom06); }
+  else if (cmd.type === 'memfind') {
+    if (!mem) { log('memfind: no memory'); }
+    else {
+      const pat = Buffer.from(String(cmd.hex || ''), 'hex');
+      const limit = Math.min(2000, Number(cmd.limit) || 50);
+      const a = u8();
+      const buf = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
+      const out = [];
+      if (pat.length) {
+        let pos = 0;
+        while (out.length < limit) {
+          const j = buf.indexOf(pat, pos);
+          if (j < 0) break;
+          out.push(j);
+          pos = j + 1;
+        }
+      }
+      if (cmd.path) fs.writeFileSync(cmd.path, JSON.stringify(out));
+      log('memfind', cmd.hex, 'hits', out.length, out.slice(0, 12).map(x => '0x' + x.toString(16)).join(','));
+    }
+  }
+  else if (cmd.type === 'dumpat') {
+    const addr = Number(cmd.addr);
+    const len = Math.min(65536, Number(cmd.len) || 256);
+    if (mem && Number.isFinite(addr) && addr >= 0) {
+      const a = u8();
+      const end = Math.min(a.length, addr + len);
+      fs.writeFileSync(cmd.path || '/tmp/opencode/dumpat.bin', Buffer.from(a.buffer, a.byteOffset + addr, end - addr));
+      log('dumpat', '0x' + addr.toString(16), end - addr);
+    } else {
+      log('dumpat: bad address');
+    }
+  }
+  else if (cmd.type === 'traceme') {
+    const p = findPose(OPT.username);
+    if (p && mem) {
+      const start = Math.max(0, p.addr - 0x20);
+      startTrace({ regions: [[start, 0x100]], hz: cmd.hz || 20,
+        frames: cmd.frames || 60, path: cmd.path || '/tmp/opencode/traceme' });
+    } else {
+      log('traceme: no pose for', OPT.username);
+    }
+  }
+  else if (cmd.type === 'dumpstruct') {
+    const name = cmd.name || OPT.username;
+    const p = findPose(name);
+    if (p && mem) {
+      const a = u8();
+      const start = Math.max(0, p.addr - 0x20);
+      const end = Math.min(a.length, p.addr + 0x80);
+      fs.writeFileSync(cmd.path || '/tmp/opencode/struct.bin', Buffer.from(a.buffer, a.byteOffset + start, end - start));
+      log('struct dumped', name, 'addr=0x' + p.addr.toString(16), 'start=0x' + start.toString(16));
+    } else {
+      log('struct dump: no pose for', name);
+    }
+  }
   else if (cmd.type === 'dumpws') { fs.writeFileSync(cmd.path || '/tmp/opencode/wsdump.json', JSON.stringify(wslog)); }
   else if (cmd.type === 'dumpmem') { if (mem) fs.writeFileSync(cmd.path || '/tmp/opencode/memdump.bin', Buffer.from(mem.buffer)); }
   else if (cmd.type === 'ready') {

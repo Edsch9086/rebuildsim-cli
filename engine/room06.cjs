@@ -1,7 +1,10 @@
 // Minimal room-state (0x06) seat parser.
 //
 // Observed player record:
-//   01 <team> <robot-id u16> 02 00 00 <name-len> <name...>
+//   01 <team> <robot-id u16> <robot-class> 00 00 <name-len> <name...>
+//
+// The byte after the robot id is a small robot/class value (2 for the default
+// 359, 0 for 4414); do not require 2.
 //
 // `<team>` is 0 for red seats and 1 for blue seats (verified with a 4-player
 // room: seats 0-2 flag 0, seat 3 flag 1, and the seat-3 client rendered blue).
@@ -20,7 +23,7 @@ function parseRoom06(buf) {
   for (let i = 64; i + 9 <= buf.length && seats.length < 6; i++) {
     if (buf[i] !== 1) continue;
     // i+2/i+3 are a variable robot/team id (359 = 67 01 in the default robot).
-    if (buf[i + 4] !== 2 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
+    if (buf[i + 4] > 3 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
     const robotId = buf.readUInt16LE(i + 2);
     if (robotId === 0 || robotId >= 0x8000) continue;
     const len = buf[i + 7];
@@ -55,6 +58,7 @@ function parseRoom06(buf) {
       seat,
       name,
       robot_id: robotId,
+      robot_class: buf[i + 4],
       team_flag: teamFlag,
       alliance: teamFlag === 1 ? 'blue' : 'red',
       ready,

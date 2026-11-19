@@ -27,6 +27,8 @@ pub struct EngineOptions {
     pub fuel: Option<String>,
     /// Optional hopper capacity for the selected robot (0..65535).
     pub hopper_capacity: Option<u16>,
+    /// Optional robot/team id to select in the room before ready.
+    pub robot: Option<u16>,
     pub server: Option<String>,
     pub binary: bool,
     pub field_frame: bool,
@@ -52,6 +54,7 @@ impl EngineOptions {
             gamepad: true,
             fuel: None,
             hopper_capacity: None,
+            robot: None,
             server: None,
             binary: true,
             field_frame: false,
@@ -77,6 +80,9 @@ pub struct Robot {
     pub y: f32,
     pub z: f32,
     pub heading: f32,
+    /// Turret yaw in radians (chassis heading is `heading`).
+    #[serde(default)]
+    pub turret_heading: f32,
     #[serde(default)]
     pub vx: f32,
     #[serde(default)]
@@ -299,6 +305,9 @@ pub struct Seat {
     /// Robot/team id from the 0x06 record (359 in the default robot).
     #[serde(default)]
     pub robot_id: u16,
+    /// Robot variant/class byte from 0x06 (0/2; V2 variants use 2).
+    #[serde(default)]
+    pub robot_class: u8,
     #[serde(default)]
     pub team_flag: u8,
     pub alliance: String,
@@ -731,6 +740,9 @@ impl Engine {
         }
         if let Some(cap) = opts.hopper_capacity {
             cmd.arg("--hopper-capacity").arg(cap.to_string());
+        }
+        if let Some(robot) = opts.robot {
+            cmd.arg("--robot").arg(robot.to_string());
         }
         if let Some(server) = &opts.server {
             cmd.arg("--server").arg(server);

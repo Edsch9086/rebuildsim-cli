@@ -44,7 +44,8 @@ timeout variants provide a deadline.
 | `substage_remaining` | seconds until the next substage boundary |
 | `x`, `y` | meters in `state.frame` (alliance-normalized by default) |
 | `z` | meters above the field surface; robot chassis is ~0 at floor level |
-| `heading` | radians in `state.frame` |
+| `heading` | chassis yaw, radians in `state.frame` |
+| `turret_heading` | turret yaw, radians in `state.frame` |
 | `vx`, `vy`, `vz` | meters/second |
 | `yaw_rate` | radians/second |
 | `fuel_count` | number of fuel records (pieces/clusters) in this match |
@@ -52,7 +53,7 @@ timeout variants provide a deadline.
 | `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
 | `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
-| `hopper_capacity` | optional robot hopper capacity; `null` unless `--hopper-capacity` is set |
+| `hopper_capacity` | actual capacity from the robot definition; `--hopper-capacity` overrides if the lookup fails |
 | `intake_active` | boolean; true while the intake trigger is held |
 | `hub.active` | `true`/`false` for our hub, `null` when AUTO was tied during a shift |
 | `fuel.flags` | raw packet bitfield; `0` normal, `7` observed for a hub cluster |
@@ -183,7 +184,8 @@ pub struct Robot {
     pub alliance: String,     // diagnostic only
     pub alliance_source: String, // "room" (0x06 seats) | "spawn"
     pub x: f32, pub y: f32, pub z: f32, // in state.frame
-    pub heading: f32,         // radians, in state.frame
+    pub heading: f32,         // chassis yaw, radians, in state.frame
+    pub turret_heading: f32,  // turret yaw, radians, in state.frame
     pub vx: f32, pub vy: f32, pub vz: f32, // m/s, in state.frame
     pub yaw_rate: f32,
     pub pose_source: String,  // "predicted" (~48 Hz) | "acked" | "stale"
@@ -195,18 +197,18 @@ pub struct Robot {
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
 name+0x4b and decrements while shooting. Hopper capacity is **robot-specific**
-(the default 359 is 55, other robots range from 0 to 115, and modded robots can
-reach 600), so it is not a build constant. Pass `--hopper-capacity <N>` if your
-bot needs the denominator; otherwise `hopper_capacity` is `null`. `intake_active`
+(the default 359 is 55, 4414 is 110, 2910 V2 is 50; other robots range 0–115 and
+modded robots can reach 600). The engine reads it from the selected robot's
+definition record; `--hopper-capacity <N>` is an override/fallback. `intake_active`
 comes from bit 6 of the byte at name+0x56 and tracks the intake trigger (true
 while held). Remote robots may report their hopper/intake too, but the local
 robot's values are the reliable ones.
 
 There is no separate "shooting" boolean in the player struct: shooting is a
 trigger, the hopper count drops as fuel is fired, and a f32 timer at name+0x4f
-changes during/after a shot. A separate turret angle has not been isolated for
-this robot; the game handles aiming internally. Hub lights are visual; use
-`hub.active` for the logical state.
+changes during/after a shot. `heading` is the chassis yaw; `turret_heading` is
+read separately from name+0x3f (the game auto-aims turreted robots). Hub lights
+are visual; use `hub.active` for the logical state.
 
 `Fuel`: `id, x, y, z, present`, plus optional `vx, vy, vz, count, flags` merged
 from the server packet in JSON mode. In binary mode those optional fields are
@@ -281,7 +283,8 @@ Engine → CLI:
  "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
        "pose_source":"predicted","x":-4.67,"y":3.40,
-       "z":0.0,"heading":-1.18,"vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0},
+       "z":0.0,"heading":0.0,"turret_heading":-1.18,
+       "vx":0.0,"vy":0.0,"vz":0.0,"yawRate":0.0},
  "robots":[...],
  "fuel":[{"id":0,"x":-0.366,"y":-1.0466,"z":0.0748,"present":true,
           "vx":0.0,"vy":0.0,"vz":0.0,"count":1,"flags":0}]}
@@ -313,6 +316,16 @@ the decoded array. Packed records carry only `present/x/y/z`; packet
 `vx/vy/vz/count/flags` are available only in JSON mode. See
 `docs/PROTOCOL.md` §1.7 for the byte layout. Use `EngineOptions.binary = false`
 to get plain JSON lines.
+
+## Robot selection
+
+`--robot <id>` selects the robot after joining by replaying the client's `0x07`
+seat/robot packet with the new id. The room's `0x06` record then reports the
+robot id and its variant class byte; the engine reads the matching robot
+definition (capacity at record offset `+0x34`) and re-readies the seat. The game
+uses its default variant for an id: `--robot 2910` selects 2910 V2 (capacity 50).
+The join UI itself is retried up to 12 times for the name/room-code entry, so a
+slow first paint does not strand the bot.
 
 ## Timeouts and disconnect handling
 

@@ -9,5 +9,10 @@ cli/target/
 node_modules/
 target/
 
+# Nix build/dev artifacts
+result
+result-*
+.direnv/
+
 # local algorithm planning workspace (notes, downloads, experiments)
 algo-planning/

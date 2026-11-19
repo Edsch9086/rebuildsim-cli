@@ -4,12 +4,12 @@ const fs = require('node:fs');
 const { parseRoom06 } = require('./room06.cjs');
 
 // Synthetic room state: five player records (0-2 red, 3 blue, 4 red).
-function rec(team, name, robotId = 359) {
+function rec(team, name, robotId = 359, robotClass = 2) {
   const b = Buffer.alloc(8 + 24);
   b[0] = 1;
   b[1] = team;
   b.writeUInt16LE(robotId, 2);
-  b[4] = 2;
+  b[4] = robotClass;
   b[7] = name.length;
   b.write(name, 8, 'utf8');
   return b;
@@ -17,7 +17,7 @@ function rec(team, name, robotId = 359) {
 const header = Buffer.alloc(64);
 header.write('06ABCDE', 0, 'latin1');
 const synthetic = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1', 4414),
-  rec(0, 'Red2', 2910), rec(1, 'BlueCap'), rec(0, 'RedFour')]);
+  rec(0, 'Red2', 2910, 0), rec(1, 'BlueCap'), rec(0, 'RedFour')]);
 const parsed = parseRoom06(synthetic);
 assert.deepStrictEqual(
   parsed.seats.map((s) => [s.seat, s.name, s.alliance]),
@@ -28,7 +28,7 @@ console.log('synthetic:', JSON.stringify(parsed.seats));
 
 // Synthetic 3v3 roster: seats 0-2 red, 3-5 blue.
 const sixSeat = Buffer.concat([header, rec(0, 'RedCap'), rec(0, 'Red1'),
-  rec(0, 'Red2', 2910), rec(1, 'BlueCap'), rec(1, 'Blue1'), rec(1, 'Blue2')]);
+  rec(0, 'Red2', 2910, 0), rec(1, 'BlueCap'), rec(1, 'Blue1'), rec(1, 'Blue2')]);
 const six = parseRoom06(sixSeat);
 assert.deepStrictEqual(six.seats.map(s => s.alliance),
   ['red', 'red', 'red', 'blue', 'blue', 'blue']);

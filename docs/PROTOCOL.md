@@ -286,16 +286,16 @@ u16 z             // bottom; add ~0.045 m for centre
 ```
 +0x1b  f32 x
 +0x1f  f32 y
-+0x23  f32 z (chassis, ~0.001)
++0x23  f32 chassis heading/yaw (radians, wraps ±π)
 +0x27  f32  \
 +0x2b  f32   > small values; likely velocities/derived state
 +0x2f  f32  /
 +0x33  f32 0
 +0x37  f32 0
 +0x3b  u32 1
-+0x3f  f32 heading (radians)
-+0x43  f32 small
-+0x47  f32 small
++0x3f  f32 turret heading (radians)
++0x43  f32 z (chassis height; near 0)
++0x47  f32 small (also near 0)
 ...
 +0x57  f32 1.0
 ```
@@ -305,13 +305,14 @@ Example (headless match, `HeadBot` at `0x1f5c45`):
 ```
 name+0x1b = -4.6725   (x, spawn)
 name+0x1f =  3.4012   (y, spawn)
-name+0x3f = -1.1787   (heading)
+name+0x23 =  0.0      (chassis heading)
+name+0x3f = -1.1787   (turret heading)
 ```
 
 After driving:
 
 ```
-x = -0.4478, y = 3.4013, heading = -3.1172
+x = -0.4478, y = 3.4013, chassis heading = 0.0, turret heading = -3.1172
 ```
 
 There are many copies (room UI, telemetry, replay, network). Two copies matter:
@@ -331,6 +332,31 @@ exposes `me`/`is_me` by username. Alliance comes from the `0x06` seat team flag
 the raw memory/packets are global field coordinates; the engine rotates them
 into the driver/alliance frame by default (`--field-frame` keeps raw global).
 See `SURVEY.md` §4.2.
+
+`+0x23` was previously labeled `z`; a turn trace showed it sweeping a full
+circle while the chassis rotated, while `+0x3f` stayed near the auto-aim target.
+The chassis height is near zero at `+0x43`/`+0x47`.
+
+### Robot definitions in the heap
+
+Robot stats are a sorted array of **0x384-byte records** in the
+`0x400000..0x420000` heap region for build `b654373`:
+
+```
++0x00  u32 robot/team id
++0x20  f32 speed-related
++0x24  f32 speed (m/s)
++0x30  f32 fire/accel-related
++0x34  u32 hopper capacity (0..600)
++0x38  f32 fire rate
++0x3c  f32 shoot-on-move fraction
++0x54  f32 intake rate
+```
+
+Some ids have two records (e.g. 359 -> 55 and 40; 2910 -> 50 (V2) and 20). The
+`0x06` record's class byte (the byte after the robot id) selects the variant:
+`0`/`1` = first record, `2`/`3` = second. The engine uses that class to return
+the actual capacity.
 
 ### 2.3 Match/room state in memory
 
