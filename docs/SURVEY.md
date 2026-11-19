@@ -152,13 +152,18 @@ simulation. We read the local player state out of wasm memory:
 name field (32 bytes, zero-padded)
 +0x1b  f32 x
 +0x1f  f32 y
-+0x23  f32 z (chassis)
++0x23  f32 chassis heading/yaw (radians, wraps ±π)
 +0x27  f32 small derived value
 +0x2b  f32 small derived value
 +0x2f  f32 small derived value
-+0x3f  f32 heading (radians)
++0x3f  f32 turret heading (radians)
++0x43  f32 z (chassis height; near 0)
 +0x57  f32 1.0 (live-copy signature)
 ```
+
+`+0x23` was originally labeled `z`; a turn trace showed it sweeping a full
+circle while the chassis rotated, while `+0x3f` stayed near the auto-aim target.
+Use `+0x23` for `heading` and expose `+0x3f` as `turret_heading`.
 
 There are two useful copies:
 
@@ -318,18 +323,24 @@ The headless engine drives the game with synthetic DOM events:
 The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game lays out
 differently at 1280×800. Use 720p for the headless engine.
 
-## 6. Spawnpoint / robot selection — deferred
+## 6. Spawnpoint / robot selection
 
-Spawnpoint selection is intentionally **dropped for now**. A tuned system can
-read its first pose at spawn and infer where it is; the room UI/`0x07` packet
-capture can be revisited later. The CLI still accepts `--spawnpoint` but the
-engine logs that it is ignored and joins with the default seat.
+Spawnpoint selection is still **deferred**: the engine infers the spawn from the
+first `me` pose and accepts `--spawnpoint` only as a logged no-op.
 
-The room UI has a robot dropdown (e.g. team 359), `SWITCH ROBOTS`, and a field
-map where the host can place robots. The join packet `0x07` carries the
-seat/robot/spawn token; the room state `0x06` echoes it. When spawn selection is
-needed, capture the field-map drag and the `0x07` fields; it is low risk but not
-finished.
+Robot selection is implemented. The client's `0x07` packet carries the
+seat/robot/spawn token; for example a red host selecting 4414 sends:
+
+```
+07 00 00 3e 11 00 00 01 16 62 c2 95 00 80
+```
+
+The robot id is the u16 at bytes 3-4. `--robot <id>` captures the join `0x07`
+and resends a copy with the id changed; the server's `0x06` then reports the new
+id and a class byte (2 for the default variant). The engine reads the matching
+robot definition record (0x384-byte stride; capacity u32 at +0x34) and uses the
+class byte to pick the variant: 359 -> 55, 4414 -> 110, 2910 V2 -> 50. Other
+robots range 0–115; modded robots up to 600.
 
 ## 7. Performance and architecture
 
