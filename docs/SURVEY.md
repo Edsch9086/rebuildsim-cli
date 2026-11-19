@@ -488,7 +488,11 @@ final `end` state, `meMissing 0`, and `unknownFrame 0` across 377 states.
 The final endgame-fuel and results-lifecycle runs on `8f78c6d` through
 `ae610a6` produced: `matches 2 states 376-378 ends 1 rooms 9-10`, `meMissing 0`,
 `unknownFrame 0`, `fuelOk 376-378/376-378`, `resultsErrors 0`, and
-`notReadyErrors 0`, with the log showing `results: back to room`. This confirms the exhaustive all-absent fuel
+`notReadyErrors 0`, with the log showing `results: back to room`. The final
+`2fbd26d` run produced `matches 2 states 379 ends 1 rooms 9`, `meMissing 0`,
+`unknownFrame 0`, `fuelOk 374/379`, `resultsErrors 0`, `notReadyErrors 0`, and
+`cap 55`; the five `fuel_ok:false` frames were the endgame verification
+transition, not a read failure. This confirms the exhaustive all-absent fuel
 verification and the stalled-clock room recovery do not disturb normal play or
 the rematch; the live run exercised the normal results return, while the early
 room-return path is covered by the timestamped latch and cached-room replay.

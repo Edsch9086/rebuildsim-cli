@@ -278,7 +278,7 @@ Engine → CLI:
  "red_score":7,"blue_score":4,"auto_red_score":3,"auto_blue_score":2,
  "scores":{"red":7,"blue":4},"protocol":1,"frame":"alliance","alliance":"red",
  "fuel_count":456,"fuel_ok":true,"fuel_source":"packet",
- "hopper_fuel":8,"hopper_capacity":55,   // example: --hopper-capacity 55
+ "hopper_fuel":8,"hopper_capacity":55,   // default 359 actual capacity
  "intake_active":false,"hub":{"active":true,"red_active":true,"blue_active":true,
  "red_inactive_first":true,"phase":"auto","source":"auto_score"},
  "me":{"name":"MyBot","is_me":true,"alliance":"red","alliance_source":"room",
