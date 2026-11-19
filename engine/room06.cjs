@@ -23,7 +23,7 @@ function parseRoom06(buf) {
   for (let i = 64; i + 9 <= buf.length && seats.length < 6; i++) {
     if (buf[i] !== 1) continue;
     // i+2/i+3 are a variable robot/team id (359 = 67 01 in the default robot).
-    if (buf[i + 4] > 3 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
+    if (buf[i + 4] > 15 || buf[i + 5] !== 0 || buf[i + 6] !== 0) continue;
     const robotId = buf.readUInt16LE(i + 2);
     if (robotId === 0 || robotId >= 0x8000) continue;
     const len = buf[i + 7];
