@@ -626,12 +626,16 @@ fn main() {
                 code,
                 reason,
                 room,
+                was_clean,
                 ..
             })) => {
                 if state == "close" || state == "error" {
                     eprintln!(
-                        "engine ws {state} id={id:?} code={code:?} room={room:?} reason={reason:?}"
+                        "engine ws {state} id={id:?} code={code:?} room={room:?}                          was_clean={was_clean:?} reason={reason:?}"
                     );
+                    if state == "close" && room != Some(true) {
+                        eprintln!("auxiliary WebSocket closed; session continues");
+                    }
                 }
                 if state == "close" && room == Some(true) && args.exit_on_ws_close {
                     eprintln!(

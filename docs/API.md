@@ -341,9 +341,14 @@ The CLI adds several watchdogs on top of the engine:
 - Heartbeat: if no engine event arrives for 15 s after `ready`, exit `5`. The
   engine emits a heartbeat every second, including between matches; the wider
   window tolerates a synchronous fuel scan.
-- Room WebSocket close: the engine emits a `ws` event tagged `room: true` when
-  the socket that delivered `0x06` closes. The CLI exits `6` in that case
-  unless `--allow-ws-close` is passed.
+- Room WebSocket close: the engine emits a `ws` event tagged `room: true` only
+  when the authoritative room socket closes (the socket that sent the `0x07`
+  seat packet, or the first `0x06` carrying our seat). The CLI exits `6` in
+  that case unless `--allow-ws-close` is passed. Auxiliary room-list/queue
+  sockets routinely close with `1006`; they are logged as
+  `ws aux close code=... clean=... reason=...` and ignored. `--wslog` records
+  send/receive/close entries; close entries include `code`, `reason`,
+  `wasClean`, and `room`.
 - If `0x41` stops for 4 s during a live match (or no auto clock at 143 s or above
   arrives within 15 s of match start), the engine emits `match_clock_stalled`;
   the CLI exits `5` immediately (or via the state timeout if states simply
@@ -369,7 +374,7 @@ room-list socket closing is reported but is not fatal.
 
 CLI exit codes: `0` normal, `1` engine/boot error, `2` bad arguments/config,
 `3` build/asset pin failure, `4` protocol mismatch, `5` state/join/heartbeat
-timeout, stalled clock, or blocked host start, `6` room WebSocket close, left
+timeout, stalled clock, or blocked host start, `6` authoritative room WebSocket close, left
 room, or stuck results screen, `7` joined as spectator, `8` identity
 failure (duplicate names).
 

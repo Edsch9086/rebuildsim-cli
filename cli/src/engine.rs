@@ -389,6 +389,8 @@ pub enum EngineEvent {
         url: Option<String>,
         #[serde(default)]
         room: Option<bool>,
+        #[serde(default)]
+        was_clean: Option<bool>,
     },
     #[serde(rename = "heartbeat")]
     Heartbeat {

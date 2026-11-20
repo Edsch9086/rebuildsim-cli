@@ -377,9 +377,10 @@ if (OPT.server) {
 }
 
 const wslog = [];
-let lastSeatPacket = null, lastRoomSocket = null;
+let lastSeatPacket = null, roomSocket = null;
+const wsById = new Map();
 const wslogEnabled = OPT.debug || process.argv.includes('--wslog') || process.env.RB_WSLOG === '1';
-let wsSeq = 0, wsOpen = 0, wsClosed = 0, lastRoomWsId = null;
+let wsSeq = 0, wsOpen = 0, wsClosed = 0;
 let role = null, lastRoomKey = '', matchEndScheduled = false;
 let readyClicked = false, startClicked = false, fuelApplied = false, uiBusy = false;
 let startClicks = 0, resultsClickScheduled = false, resultsPending = false;
@@ -810,20 +811,29 @@ function onMatchStart() {
 function handleServerFrame(buf, wsId) {
   if (!buf || !buf.length) return;
   const type = buf[0];
-  if ((type === 0x41 || type === 0x42) && lastRoomWsId && wsId && wsId !== lastRoomWsId) {
-    log('ignoring match/fuel frame from a non-room socket', wsId);
-    return;
-  }
-  if (type === 0x06) {
-    // The room-list socket can carry room-state-looking frames too; only the
-    // second (room) connection is authoritative.
-    if (wsId === 1) {
-      log('ignoring 0x06 from the room-list socket');
+  const roomId = roomSocket ? roomSocket.__rbId : null;
+  if ((type === 0x41 || type === 0x42)) {
+    if (roomId && wsId && wsId !== roomId) {
+      log('ignoring match/fuel frame from a non-room socket', wsId);
       return;
     }
-    if (lastRoomWsId && wsId && wsId !== lastRoomWsId) {
-      log('ignoring 0x06 from a stale socket', wsId);
+    if (!roomSocket && wsId) roomSocket = wsById.get(wsId) || null;
+  }
+  if (type === 0x06) {
+    // The room-list socket can carry room-state-looking frames too. Until the
+    // seat packet identifies the room socket, accept only a packet that
+    // already contains our seat; the 0x07 seat send is the definitive tag.
+    if (roomId && wsId && wsId !== roomId) {
+      log('ignoring 0x06 from a non-room socket', wsId);
       return;
+    }
+    if (!roomSocket) {
+      const pre = parseRoom06(buf);
+      if (!pre.seats.some(s => s.name === OPT.username)) {
+        log('ignoring pre-seat 0x06 from an auxiliary socket');
+        return;
+      }
+      if (wsId) roomSocket = wsById.get(wsId) || null;
     }
     // room state: room code at 1..5, then seat records in seat order.
     const nextCode = buf.subarray(1, 6).toString('latin1').trim().toUpperCase();
@@ -831,7 +841,6 @@ function handleServerFrame(buf, wsId) {
       log('ignoring room packet with malformed code');
       return;
     }
-    if (!lastRoomWsId && wsId && wsId !== 1) lastRoomWsId = wsId;
     if (roomCode && nextCode !== roomCode) {
       log('room code changed', roomCode, '->', nextCode);
       clearRoomIdentity();
@@ -849,7 +858,6 @@ function handleServerFrame(buf, wsId) {
       // Only an accepted packet becomes the last-good seat source or tags the
       // room socket; a stale/partial packet must not steal either.
       lastRoom06 = Buffer.from(buf);
-      if (!lastRoomWsId && wsId) lastRoomWsId = wsId;
     }
     if (globalThis.__RB_DEBUG) log('ROOM06', buf.toString('hex'));
     log('room state', roomCode, 'names', [...roomNames].slice(0, 12), 'len', buf.length);
@@ -879,6 +887,7 @@ globalThis.WebSocket = class extends NativeWS {
     super(url, protocols);
     const id = ++wsSeq;
     this.__rbId = id;
+    wsById.set(id, this);
     this.binaryType = 'arraybuffer';
     this.addEventListener('message', (e) => {
       let buf = null;
@@ -905,10 +914,20 @@ globalThis.WebSocket = class extends NativeWS {
         wsOpen = Math.max(0, wsOpen - 1);
         wsClosed++;
       }
-      const room = id === lastRoomWsId;
-      log('WS close', id, e.code, e.reason, room ? '(room)' : '');
-      emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason, url, room });
-      if (id === lastRoomWsId) lastRoomWsId = null;
+      const room = this === roomSocket;
+      const clean = !!e.wasClean;
+      log(`ws ${room ? 'room' : 'aux'} close code=${e.code} clean=${clean} reason=${e.reason || ''}`);
+      if (wslogEnabled) {
+        wslog.push({ dir: 'close', id, code: e.code, reason: e.reason,
+          wasClean: clean, room, url, t: Date.now() });
+      }
+      emit({ type: 'ws', state: 'close', id, code: e.code, reason: e.reason,
+        url, room, was_clean: clean });
+      wsById.delete(id);
+      // Only the room socket is a session close. Auxiliary lobby/queue
+      // sockets close with 1006 routinely and must not stop the driver.
+      if (!room) return;
+      roomSocket = null;
     });
     this.addEventListener('error', () => {
       if (globalThis.__RB_DEBUG) log('WS error', id);
@@ -923,7 +942,7 @@ globalThis.WebSocket = class extends NativeWS {
       if (buf) {
         if (buf[0] === 0x07) {
           lastSeatPacket = Buffer.from(buf);
-          lastRoomSocket = this;
+          roomSocket = this;
           if (globalThis.__RB_DEBUG) log('SEAT07', buf.toString('hex'));
           setTimeout(() => { if (robotSelectionPending()) maybeSelectRobot(); }, 1200);
         }
@@ -1899,13 +1918,13 @@ function robotSelectionPending() {
 
 function sendRobotSelection(id) {
   if (!lastSeatPacket || lastSeatPacket.length < 14) return false;
-  if (!lastRoomSocket || lastRoomSocket.readyState !== 1) return false;
+  if (!roomSocket || roomSocket.readyState !== 1) return false;
   const pkt = Buffer.from(lastSeatPacket);
   pkt.writeUInt16LE(id, 3);
-  log('send robot selection', id, pkt.toString('hex'), 'ready', lastRoomSocket.readyState);
+  log('send robot selection', id, pkt.toString('hex'), 'ready', roomSocket.readyState);
   const ab = pkt.buffer.slice(pkt.byteOffset, pkt.byteOffset + pkt.byteLength);
   try {
-    lastRoomSocket.send(ab);
+    roomSocket.send(ab);
   } catch (e) {
     log('robot selection send error', String(e));
     return false;
