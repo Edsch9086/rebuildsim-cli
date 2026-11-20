@@ -2579,6 +2579,18 @@ rl.on('line', (line) => {
   try { cmd = JSON.parse(s); } catch { log('bad command', s); return; }
   if (cmd.type === 'input') applyInput(cmd);
   else if (cmd.type === 'click') globalThis.__ctl.click(Number(cmd.x) || 0, Number(cmd.y) || 0);
+  else if (cmd.type === 'drag') {
+    const x1 = Number(cmd.x1) || 0, y1 = Number(cmd.y1) || 0;
+    const x2 = Number(cmd.x2) || 0, y2 = Number(cmd.y2) || 0;
+    mouse('mousemove', x1, y1, 0, 0);
+    setTimeout(() => mouse('mousedown', x1, y1, 0, 1), 100);
+    for (let i = 1; i <= 12; i++) {
+      setTimeout(() => mouse('mousemove',
+        Math.round(x1 + (x2 - x1) * i / 12),
+        Math.round(y1 + (y2 - y1) * i / 12), 0, 1), 200 + i * 40);
+    }
+    setTimeout(() => mouse('mouseup', x2, y2, 0, 0), 800);
+  }
   else if (cmd.type === 'pad') {
     if (Array.isArray(cmd.axes)) for (let i = 0; i < Math.min(pad.axes.length, cmd.axes.length); i++) pad.axes[i] = Number(cmd.axes[i]) || 0;
     if (Array.isArray(cmd.buttons)) for (let i = 0; i < Math.min(pad.buttons.length, cmd.buttons.length); i++) {
