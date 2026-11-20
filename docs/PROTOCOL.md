@@ -408,6 +408,13 @@ for the headless engine.
   - `START MATCH` (1028..1268); center `(1150, 688)`
 - Start-with-unready dialog: `START ANYWAY` at `(640, 372)` in 800px layout;
   check the current screenshot before clicking.
+- Player cards: red captain `(100, 272)` / red 1 `(100, 332)` / red 2
+  `(100, 392)` / red 3 `(100, 452)`; blue uses x≈430. Click your own card to
+  select it; the room then reveals `WATCHING <n>` below `SIDELINE`.
+- Spectator moves (after selecting your card): `WATCHING` target `(215, 610)`
+  for a non-host; `SIDELINE`/referee `(190, 530)` is host-only. The non-host
+  move is sent as `0x09` (observed `09 01 00 00 ff`) and the server records it
+  as `room_action` `action: "bench"`, `by: "self"`.
 
 ### Text API exports
 

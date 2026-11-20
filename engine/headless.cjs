@@ -443,7 +443,6 @@ function failIdentity(reason, detail) {
 let joinFatal = false, spectatorFatal = false, spectatorExitTimer = null;
 let spectatorMoved = false, spectatorMoveTries = 0, spectatorMoveTimer = null;
 let spectatorMovePending = false, spectatorMoveFailed = false, lastSpectatorMoveAt = 0;
-let spectatorWaitReported = false;
 function failSpectator(detail) {
   if (OPT.spectator) {
     confirmSpectator([]);
@@ -781,14 +780,7 @@ function confirmSpectator(seats = []) {
 
 function maybeMoveToSpectator() {
   if (!OPT.spectator || spectatorMoved || spectatorMovePending || !flow.joined || !seated) return;
-  if (!host) {
-    if (!spectatorWaitReported) {
-      spectatorWaitReported = true;
-      log('spectator: waiting for the room host to move this player to SIDELINE');
-    }
-    return;
-  }
-  if (spectatorMoveFailed || spectatorMoveTries >= 3) return;
+  if (spectatorMoveFailed || spectatorMoveTries >= 4) return;
   if (Date.now() - lastSpectatorMoveAt < 3000) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat) return;
@@ -797,23 +789,30 @@ function maybeMoveToSpectator() {
   const row = Math.max(0, teamSeats.findIndex(s => s.name === OPT.username));
   const x = seat.team_flag === 1 ? 430 : 100;
   const y = 263 + row * 64;
+  // Select our own player card first; the room then reveals the move targets.
+  // The host may take the referee SIDELINE slot. A non-host may only move to
+  // the WATCHING area (below SIDELINE at 1280x720); it must never take the
+  // referee slot.
+  const target = host ? { x: 190, y: 530, name: 'referee' }
+    : { x: 215, y: 610, name: 'watching' };
   spectatorMoveTries++;
   lastSpectatorMoveAt = Date.now();
   spectatorMovePending = true;
   cancelReadyClick();
-  log('moving to spectator seat', 'seat', seat.seat, 'source', x, y,
-    'attempt', spectatorMoveTries);
+  log(`moving to ${target.name} slot`, 'seat', seat.seat, 'source', x, y,
+    'target', target.x, target.y, 'attempt', spectatorMoveTries);
   globalThis.__ctl.click(x, y);
   spectatorMoveTimer = uiLater(() => {
-    globalThis.__ctl.click(190, 530);
+    globalThis.__ctl.click(target.x, target.y);
     spectatorMoveTimer = uiLater(() => {
       spectatorMoveTimer = null;
       spectatorMovePending = false;
-      if (!spectatorMoved && spectatorMoveTries >= 3) {
+      if (!spectatorMoved && spectatorMoveTries >= 4) {
         spectatorMoveFailed = true;
-        log('spectator seat move failed; the room host must move this player');
-        emit({ type: 'error', error: 'spectator_move_failed',
-          detail: 'seat move was not confirmed' });
+        const detail = host ? 'seat move was not confirmed'
+          : 'watching move was not confirmed';
+        log(`spectator ${target.name} move failed`, detail);
+        emit({ type: 'error', error: 'spectator_move_failed', detail });
       }
     }, 1800);
   }, 500);

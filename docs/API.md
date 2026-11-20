@@ -339,10 +339,12 @@ slow first paint does not strand the bot.
 
 ## Spectator / SIDELINE
 
-`--spectator` joins, never readies or starts, and moves to the SIDELINE/referee
-seat. The server records seat moves as `by: host`; a host/creator bot self-moves,
-while a joiner must be moved by the room host (the game does not accept a
-non-host seat move). Once moved, the engine reports `role: "spectator"`,
+`--spectator` joins, never readies or starts, and moves itself to a spectator
+slot. A host/creator selects its own card and takes the `SIDELINE`/referee slot;
+a non-host selects its own card and takes a `WATCHING` slot, and can never take
+the referee slot or return itself to a driver seat. The room records the
+non-host move as `room_action` `action: "bench"`, `by: "self"` (a host move is
+`by: "host"`). Once moved, the engine reports `role: "spectator"`,
 `seated: false`, `me: null`, and continues to emit robots/fuel state. The host
 may need to confirm `START ANYWAY` because the referee/spectator does not ready.
 The engine keeps running in spectator mode instead of exiting `7`.

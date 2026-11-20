@@ -107,7 +107,7 @@ OPTIONS:
   --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150; % optional)
   --hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
   --robot <ID>        select this robot/team id in the room before ready
-  --spectator         move to the sideline/referee seat; never ready or start
+  --spectator         move to a spectator slot (host: SIDELINE; joiner: WATCHING); never ready or start
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized

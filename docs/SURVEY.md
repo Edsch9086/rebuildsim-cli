@@ -320,6 +320,11 @@ The headless engine drives the game with synthetic DOM events:
   ready" → `START ANYWAY`.
 - Joining a room whose match is already running puts you in as a **spectator**;
   join before start to drive.
+- To spectate from a driver seat, select your own player card, then click the
+  `WATCHING` target `(215, 610)` at 1280×720. The server records this non-host
+  self-move as `room_action` `action: "bench"`, `by: "self"` (outgoing `0x09`).
+  The referee `SIDELINE` slot `(190, 530)` is host-only; a non-host cannot take
+  it or move itself back to a driver seat.
 
 The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game lays out
 differently at 1280×800. Use 720p for the headless engine.
