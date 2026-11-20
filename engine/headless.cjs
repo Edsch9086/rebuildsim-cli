@@ -1077,6 +1077,46 @@ function parseFuelPacket(buf) {
   }
 }
 
+function fuelCandidateBases() {
+  if (!mem || !fuelPacketCount) return [];
+  const a = u8();
+  const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
+  const all = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount)
+    .sort((x, y) => y.seen - x.seen);
+  const present = all.filter(r => r.count > 0);
+  const probes = present.length
+    ? [...present.slice(0, 5), ...all.filter(r => r.count === 0).slice(0, 5)]
+    : all.slice(0, 10);
+  if (!probes.length) return [];
+  const bases = new Map();
+  const pat = Buffer.alloc(4);
+  for (const probe of probes) {
+    pat.writeUInt16LE(probe.x, 0);
+    pat.writeUInt16LE(probe.y, 2);
+    let pos = 0, hits = 0;
+    while (hits++ < 60) {
+      const hit = hay.indexOf(pat, pos);
+      if (hit < 0) break;
+      pos = hit + 1;
+      const base = hit - 1 - probe.id * 7;
+      if (base < 0) continue;
+      let total = 0, ok = 0, presentMatches = 0, absentMatches = 0;
+      for (const q of probes) {
+        const res = fuelProbeResult(a, base + q.id * 7, q, 3);
+        if (res === 'invalid') continue;
+        total++;
+        if (res === 'present') { ok++; presentMatches++; }
+        else if (res === 'absent') { ok++; absentMatches++; }
+      }
+      if (total >= Math.min(4, probes.length) && ok >= Math.ceil(total * 0.7)
+          && (presentMatches >= 1 || present.length === 0)) {
+        bases.set(base, { base, total, ok, presentMatches, absentMatches });
+      }
+    }
+  }
+  return [...bases.values()].sort((x, y) => x.base - y.base);
+}
+
 function locateFuelFromPacketInner() {
   if (!mem || !fuelPacketCount) return 0;
   const deadline = Date.now() + 1000;
@@ -1084,9 +1124,10 @@ function locateFuelFromPacketInner() {
   const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
   const candidates = [...fuelPacket.values()].filter(r => r.id < fuelPacketCount);
   const present = candidates.filter(r => r.count > 0);
-  const probes = (present.length ? present : candidates)
-    .sort((a, b) => b.seen - a.seen)
-    .slice(0, 10);
+  const recent = candidates.sort((a, b) => b.seen - a.seen);
+  const probes = present.length
+    ? [...present.slice(0, 5), ...recent.filter(r => r.count === 0).slice(0, 5)]
+    : recent.slice(0, 10);
   if (!probes.length) return 0;
   const pat = Buffer.alloc(4);
   for (const probe of probes) {
@@ -1314,7 +1355,7 @@ function findFuelArray() {
 }
 
 function maybeScanFuel() {
-  if (!matchStarted || !mem || fuelAddr) return;
+  if (!matchStarted || !mem || fuelAddr || fuelPacket.size) return;
   const now = Date.now();
   if (now - lastFuelScan <= 2000) return;
   lastFuelScan = now;
@@ -1323,10 +1364,10 @@ function maybeScanFuel() {
 
 function readFuel() {
   refreshFrame();
-  if (!fuelAddr || !mem || !fuelPacketCount) return [];
-  const a = u8();
+  if (!fuelPacketCount) return [];
+  const a = mem ? u8() : null;
   const count = fuelPacketCount;
-  if (fuelAddr + count * 7 > a.length) {
+  if (fuelAddr && a && fuelAddr + count * 7 > a.length) {
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
@@ -1334,16 +1375,30 @@ function readFuel() {
     fuelScanCursor = 0x10000;
     lastFuelLocate = 0;
     fuelLocateFails = 0;
-    return [];
   }
   const out = [];
   for (let i = 0; i < count; i++) {
-    const off = fuelAddr + i * 7;
-    const present = a[off] === 1;
-    const x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
-    const y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
-    const z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
     const p = fuelPacket.get(i);
+    let present, x, y, z;
+    if (p) {
+      // The 0x42 packet is the live server state. Prefer it over the memory
+      // copy so the static start-position table cannot mask the live array.
+      present = p.count > 0;
+      x = (p.x - 0x8000) / 4096;
+      y = (p.y - 0x8000) / 4096;
+      z = (p.z - 0x8000) / 4096; // packet z is already the centre
+    } else if (fuelPacket.size === 0 && fuelAddr && a) {
+      // Before the first 0x42 chunk arrives, fall back to the memory copy.
+      const off = fuelAddr + i * 7;
+      present = a[off] === 1;
+      x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
+      y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
+      z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
+    } else {
+      // We have live packet data and no record for this id: it is not present.
+      present = false;
+      x = 0; y = 0; z = 0;
+    }
     const fp = allianceVec(x, y);
     const item = { id: i, x: +fp.x.toFixed(4), y: +fp.y.toFixed(4), z: +z.toFixed(4), present };
     if (p) {
@@ -2252,7 +2307,7 @@ setInterval(() => {
     if (flow.joined) emitRoom();
     return;
   }
-  if (fuelAddr && fuelNow - lastFuelVerify > 2000) {
+  if (fuelAddr && fuelPacket.size === 0 && fuelNow - lastFuelVerify > 2000) {
     lastFuelVerify = fuelNow;
     if (verifyFuelBase()) {
       fuelVerified = true;
@@ -2333,8 +2388,9 @@ setInterval(() => {
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: (() => { const our = roomSeats.find(s => s.name === OPT.username); return (our && readRobotCapacity(our.robot_id, our.robot_class)) ?? OPT.hopperCapacity; })(),
     intake_active: me ? me.intake_active : null,
-    fuel_ok: fuelVerified && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
-    fuel_source: fuelSource,
+    fuel_ok: (fuelPacket.size > 0 || fuelVerified) && fuelPacketCount > 0
+      && fuel.length === fuelPacketCount,
+    fuel_source: fuelPacket.size > 0 ? 'packet' : fuelSource,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
@@ -2449,6 +2505,21 @@ rl.on('line', (line) => {
   }
   else if (cmd.type === 'trace') startTrace(cmd);
   else if (cmd.type === 'dump06') { if (lastRoom06) fs.writeFileSync(cmd.path || '/tmp/opencode/room06.bin', lastRoom06); }
+  else if (cmd.type === 'fuelpacket') {
+    const missing = [];
+    for (let i = 0; i < fuelPacketCount; i++) if (!fuelPacket.has(i)) missing.push(i);
+    log('fuelpacket size', fuelPacket.size, 'count', fuelPacketCount,
+      'missing', missing.length, missing.slice(0, 20).join(','));
+    if (cmd.path) fs.writeFileSync(cmd.path, JSON.stringify({
+      size: fuelPacket.size, count: fuelPacketCount, missing,
+      present: [...fuelPacket.values()].filter(r => r.count > 0).length,
+    }, null, 1));
+  }
+  else if (cmd.type === 'fuelcandidates') {
+    const c = fuelCandidateBases();
+    log('fuel candidates', JSON.stringify(c));
+    if (cmd.path) fs.writeFileSync(cmd.path, JSON.stringify(c, null, 1));
+  }
   else if (cmd.type === 'memfind') {
     if (!mem) { log('memfind: no memory'); }
     else {

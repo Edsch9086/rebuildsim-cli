@@ -50,7 +50,7 @@ timeout variants provide a deadline.
 | `yaw_rate` | radians/second |
 | `fuel_count` | number of fuel records (pieces/clusters) in this match |
 | `fuel.id` | zero-based fuel array index, `0..fuel_count-1` |
-| `fuel.x/y/z` | meters; `z` already includes the +0.045 m center offset |
+| `fuel.x/y/z` | meters; `z` is the center (packet z, or memory bottom + 0.045 m) |
 | `fuel.count` | number of fuel pieces represented by that record (cluster size; usually 1) |
 | `hopper_fuel` | fuel pieces currently in the local robot's hopper (integer) |
 | `hopper_capacity` | actual capacity from the robot definition; `--hopper-capacity` overrides if the lookup fails |
@@ -194,6 +194,14 @@ pub struct Robot {
     pub intake_active: Option<bool>, // that robot's intake flag
 }
 ```
+
+Fuel positions and `present` flags come from the latest `0x42` packet record for
+each id; the wasm memory copy is only a fallback before the first chunk. This
+matters because the game keeps both a static start-position table and the live
+simulation array. The engine reports `fuel_source: "packet"` once packet data is
+available; ids the server did not send are emitted as absent. `fuel_ok` is true
+when a full `fuel_count` array is emitted. `fuel.x/y/z` are center positions
+(packet z, or memory bottom + 0.045 m).
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
 name+0x4b and decrements while shooting. Hopper capacity is **robot-specific**

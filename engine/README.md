@@ -202,8 +202,10 @@ Playwright.
   auto-ready, and the human starts the match. The engine checks the 0x06 ready
   byte and only clicks READY if the seat is not ready (rematch), so it never
   toggles a ready seat off. `--create`/`--start` are for testing only.
-- Fuel count is dynamic (1..~4300). The engine locates the memory array by
-  matching recent `0x42` packet records; it does not assume 456.
+- Fuel count is dynamic (1..~4300). Positions/presence come from the latest
+  `0x42` record for each id; the memory copy is only a pre-first-chunk fallback.
+  The game has both a static start-position table and the live simulation array,
+  so packet data is authoritative. It does not assume 456.
 - One engine = one wasm instance + two WebSocket connections (room list + room).
   For multiple bots, spawn one
   process per bot. The **public server has a per-IP connection limit**; a second

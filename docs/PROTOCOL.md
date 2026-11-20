@@ -263,9 +263,14 @@ u16 y
 u16 z             // bottom; add ~0.045 m for centre
 ```
 
+- The game keeps **two copies**: a static start-position table and the live
+  simulation array. Both match the initial packet. The engine therefore uses the
+  latest `0x42` record for each id as the authoritative position/presence source
+  and uses memory only before the first chunk.
 - Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
-  for that 4-byte pair, set `base = hit - 1 - id*7`, and verify several packet
-  records against the base. Packet `z` is the fuel centre while the memory
+  for that 4-byte pair, set `base = hit - 1 - id*7`, and verify mixed recent
+  present/absent packet records against the base. The mixed probes reject a
+  static start table once fuel has been consumed. Packet `z` is the fuel centre while the memory
   record stores the bottom, so compare `mz + 0.045 m` to packet `z`.
 - The cached base is re-verified against packet records every ~2 s and relocated
   if it moved.
