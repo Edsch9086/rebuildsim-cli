@@ -62,6 +62,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | test-only host UI flow; 25% → 150 fuel validated |
 | Robot selection | ✅ `--robot <id>` after join (0x07 replay; game default variant, e.g. 2910 V2) |
+| Spectator mode | ✅ `--spectator`; host self-moves to SIDELINE, joiners wait for host; never ready/start |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
@@ -95,6 +96,9 @@ cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --d
 
 # select a robot after joining (the game's default variant for that id)
 cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --robot 4414
+
+# watch from SIDELINE/referee (never readies; a non-host must be moved by the host)
+cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username WatchBot --spectator
 ```
 
 ## Nix

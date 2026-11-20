@@ -336,6 +336,16 @@ uses its default variant for an id: `--robot 2910` selects 2910 V2 (capacity 50)
 The join UI itself is retried up to 12 times for the name/room-code entry, so a
 slow first paint does not strand the bot.
 
+## Spectator / SIDELINE
+
+`--spectator` joins, never readies or starts, and moves to the SIDELINE/referee
+seat. The server records seat moves as `by: host`; a host/creator bot self-moves,
+while a joiner must be moved by the room host (the game does not accept a
+non-host seat move). Once moved, the engine reports `role: "spectator"`,
+`seated: false`, `me: null`, and continues to emit robots/fuel state. The host
+may need to confirm `START ANYWAY` because the referee/spectator does not ready.
+The engine keeps running in spectator mode instead of exiting `7`.
+
 ## Timeouts and disconnect handling
 
 The CLI adds several watchdogs on top of the engine:

@@ -29,6 +29,8 @@ pub struct EngineOptions {
     pub hopper_capacity: Option<u16>,
     /// Optional robot/team id to select in the room before ready.
     pub robot: Option<u16>,
+    /// Move to the sideline/referee seat after joining; never ready or start.
+    pub spectator: bool,
     pub server: Option<String>,
     pub binary: bool,
     pub field_frame: bool,
@@ -55,6 +57,7 @@ impl EngineOptions {
             fuel: None,
             hopper_capacity: None,
             robot: None,
+            spectator: false,
             server: None,
             binary: true,
             field_frame: false,
@@ -745,6 +748,9 @@ impl Engine {
         }
         if let Some(robot) = opts.robot {
             cmd.arg("--robot").arg(robot.to_string());
+        }
+        if opts.spectator {
+            cmd.arg("--spectator");
         }
         if let Some(server) = &opts.server {
             cmd.arg("--server").arg(server);

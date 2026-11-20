@@ -33,6 +33,7 @@ struct Args {
     fuel: Option<String>,
     hopper_capacity: Option<u16>,
     robot: Option<u16>,
+    spectator: bool,
     server: Option<String>,
     binary: bool,
     field_frame: bool,
@@ -65,6 +66,7 @@ impl Default for Args {
             fuel: None,
             hopper_capacity: None,
             robot: None,
+            spectator: false,
             server: None,
             binary: true,
             field_frame: false,
@@ -105,6 +107,7 @@ OPTIONS:
   --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150; % optional)
   --hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
   --robot <ID>        select this robot/team id in the room before ready
+  --spectator         move to the sideline/referee seat; never ready or start
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -164,6 +167,7 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|_| "--hopper-capacity must be 0..65535")?,
                 );
             }
+            "--spectator" => a.spectator = true,
             "--robot" => {
                 let value = it.next().ok_or("--robot needs a value")?;
                 a.robot = Some(
@@ -393,6 +397,7 @@ fn main() {
     opts.fuel = args.fuel.clone();
     opts.hopper_capacity = args.hopper_capacity;
     opts.robot = args.robot;
+    opts.spectator = args.spectator;
     opts.server = args.server.clone();
     opts.binary = args.binary;
     opts.field_frame = args.field_frame;
@@ -500,8 +505,13 @@ fn main() {
                     last_state = Instant::now();
                 }
                 if !seated {
-                    eprintln!("room reports no driver seat; waiting for engine outcome");
-                    spectator_pending = Some(Instant::now());
+                    if args.spectator {
+                        eprintln!("spectating (no driver seat)");
+                        spectator_pending = None;
+                    } else {
+                        eprintln!("room reports no driver seat; waiting for engine outcome");
+                        spectator_pending = Some(Instant::now());
+                    }
                 } else {
                     spectator_pending = None;
                 }

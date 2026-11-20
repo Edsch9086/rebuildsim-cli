@@ -264,6 +264,7 @@ const OPT = {
   fuel: getArg('fuel', ''),
   hopperCapacity: getArg('hopper-capacity', ''),
   robot: getArg('robot', ''),
+  spectator: process.argv.includes('--spectator'),
   binary: process.argv.includes('--binary'),
   fieldFrame: process.argv.includes('--field-frame'),
   frameAlliance: getArg('frame-alliance', ''),
@@ -440,7 +441,14 @@ function failIdentity(reason, detail) {
   setTimeout(() => process.exit(8), 100);
 }
 let joinFatal = false, spectatorFatal = false, spectatorExitTimer = null;
+let spectatorMoved = false, spectatorMoveTries = 0, spectatorMoveTimer = null;
+let spectatorMovePending = false, spectatorMoveFailed = false, lastSpectatorMoveAt = 0;
+let spectatorWaitReported = false;
 function failSpectator(detail) {
+  if (OPT.spectator) {
+    confirmSpectator([]);
+    return;
+  }
   if (spectatorFatal || identityFatal || joinFatal) return;
   spectatorFatal = true;
   log('joined without a driver seat; exiting', detail || '');
@@ -533,6 +541,7 @@ function resetMatchState(clearRoster = false) {
 }
 
 function noteSeatPresence(ours) {
+  if (OPT.spectator) return;
   if (ours) {
     seatMissingSince = 0;
     lastOurSeatAt = Date.now();
@@ -581,6 +590,11 @@ function clearRoomIdentity() {
 function applyRoom06(buf, cached = false) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
+    if (OPT.spectator && flow.joined && !spectatorMoved
+        && buf.includes(Buffer.from(OPT.username))) {
+      confirmSpectator([]);
+      return true;
+    }
     // A parse miss is not evidence that the seat is gone. Keep the last good
     // list but debounce the missing-seat path so repeated empty packets can
     // demote/exit instead of leaving a zombie.
@@ -611,12 +625,16 @@ function applyRoom06(buf, cached = false) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (oursBefore && !oursNow) {
+      if (OPT.spectator) {
+        confirmSpectator(parsed.seats);
+        return true;
+      }
       // A parsed packet that omits us starts the debounce; any packet that
       // contains us cancels it. Results-screen packets must not demote us.
       log('room packet omits our seat; keeping last good seat list');
       cancelReadyClick();
       lastReadyClickAt = 0;
-      if (!resultsPending) noteSeatPresence(false);
+      if (!resultsPending && !OPT.spectator) noteSeatPresence(false);
       return false;
     }
     if (matchStarted && clockStarted) {
@@ -633,8 +651,19 @@ function applyRoom06(buf, cached = false) {
         return false;
       }
     } else if (parsed.seats.length < roomSeats.length) {
+      const omitted = roomSeats.filter(old =>
+        !parsed.seats.some(s => s.name === old.name));
+      // A player moved to SIDELINE/referee appears in a spectator record in
+      // the same 0x06 packet, not in the driver list. Accept that shrink
+      // immediately; a partial packet that lost a player does not contain the
+      // omitted name at all.
+      const movedToSpectator = omitted.length > 0
+        && omitted.every(old => buf.includes(Buffer.from(old.name)));
       if (ourIdentityChanged && nextOurs) {
         log('our seat/team changed; accepting the smaller snapshot');
+        shrinkKey = null;
+      } else if (movedToSpectator) {
+        log('omitted seat(s) appear as spectators; accepting the smaller snapshot');
         shrinkKey = null;
       } else {
         // Lobby shrink: require the same smaller snapshot twice so one partial
@@ -707,7 +736,7 @@ function applyRoom06(buf, cached = false) {
       return false;
     }
     if (!ours) {
-      if (!resultsPending) noteSeatPresence(false);
+      if (!resultsPending && !OPT.spectator) noteSeatPresence(false);
       return false;
     }
     if (!seated || role !== 'driver') {
@@ -717,7 +746,7 @@ function applyRoom06(buf, cached = false) {
     }
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
     if (ourSeat && ourSeat.ready === true) readyClicked = true;
-    if (!resultsPending) {
+    if (!resultsPending && !OPT.spectator) {
       readyIfNeeded();
       const ourSeatNow = roomSeats.find(s => s.name === OPT.username);
       if (!cached && host && OPT.start && !startClicked && !matchStarted && !uiBusy
@@ -728,8 +757,67 @@ function applyRoom06(buf, cached = false) {
       }
     }
   }
+  if (OPT.spectator && roomSeats.some(s => s.name === OPT.username)) {
+    // A stale packet still seats us; retry the sideline move.
+    spectatorMoved = false;
+    if (spectatorMoveFailed) { spectatorMoveFailed = false; spectatorMoveTries = 0; }
+  }
   maybeSelectRobot();
+  maybeMoveToSpectator();
   return true;
+}
+
+function confirmSpectator(seats = []) {
+  spectatorMoved = true;
+  spectatorMovePending = false;
+  spectatorMoveFailed = false;
+  seated = false;
+  role = 'spectator';
+  roomSeats = seats;
+  roomNames = new Set(seats.map(s => s.name));
+  seatsKey = '';
+  emitRoom();
+  log('spectating');
+}
+
+function maybeMoveToSpectator() {
+  if (!OPT.spectator || spectatorMoved || spectatorMovePending || !flow.joined || !seated) return;
+  if (!host) {
+    if (!spectatorWaitReported) {
+      spectatorWaitReported = true;
+      log('spectator: waiting for the room host to move this player to SIDELINE');
+    }
+    return;
+  }
+  if (spectatorMoveFailed || spectatorMoveTries >= 3) return;
+  if (Date.now() - lastSpectatorMoveAt < 3000) return;
+  const seat = roomSeats.find(s => s.name === OPT.username);
+  if (!seat) return;
+  const teamSeats = roomSeats.filter(s => s.team_flag === seat.team_flag)
+    .sort((a, b) => a.seat - b.seat);
+  const row = Math.max(0, teamSeats.findIndex(s => s.name === OPT.username));
+  const x = seat.team_flag === 1 ? 430 : 100;
+  const y = 263 + row * 64;
+  spectatorMoveTries++;
+  lastSpectatorMoveAt = Date.now();
+  spectatorMovePending = true;
+  cancelReadyClick();
+  log('moving to spectator seat', 'seat', seat.seat, 'source', x, y,
+    'attempt', spectatorMoveTries);
+  globalThis.__ctl.click(x, y);
+  spectatorMoveTimer = uiLater(() => {
+    globalThis.__ctl.click(190, 530);
+    spectatorMoveTimer = uiLater(() => {
+      spectatorMoveTimer = null;
+      spectatorMovePending = false;
+      if (!spectatorMoved && spectatorMoveTries >= 3) {
+        spectatorMoveFailed = true;
+        log('spectator seat move failed; the room host must move this player');
+        emit({ type: 'error', error: 'spectator_move_failed',
+          detail: 'seat move was not confirmed' });
+      }
+    }, 1800);
+  }, 500);
 }
 
 function parse41(buf) {
@@ -1872,7 +1960,7 @@ function cancelReadyClick() {
 }
 
 function readyIfNeeded(force = false) {
-  if (matchStarted || uiBusy || resultsPending || readyClickPending || robotSelecting) return;
+  if (OPT.spectator || matchStarted || uiBusy || resultsPending || readyClickPending || robotSelecting) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
   if (OPT.robot != null && seat.robot_id !== OPT.robot && robotSelectFails < 3) return;
@@ -1902,7 +1990,7 @@ function returnToRoom() {
 }
 
 function clickStartWhenReady(attempt = 0, force = false) {
-  if (!host || resultsPending || flow.match || matchStarted || robotSelecting) {
+  if (OPT.spectator || !host || resultsPending || flow.match || matchStarted || robotSelecting) {
     startClicked = false;
     return;
   }
@@ -1949,7 +2037,7 @@ function clickStartWhenReady(attempt = 0, force = false) {
 }
 
 function robotSelectionPending() {
-  if (OPT.robot == null || matchStarted || flow.match || !flow.joined || !seated) return false;
+  if (OPT.spectator || OPT.robot == null || matchStarted || flow.match || !flow.joined || !seated) return false;
   const seat = roomSeats.find(s => s.name === OPT.username);
   return !!seat && seat.robot_id !== OPT.robot;
 }
@@ -2488,6 +2576,15 @@ rl.on('line', (line) => {
   }
   else if (cmd.type === 'trace') startTrace(cmd);
   else if (cmd.type === 'dump06') { if (lastRoom06) fs.writeFileSync(cmd.path || '/tmp/opencode/room06.bin', lastRoom06); }
+  else if (cmd.type === 'sendroom') {
+    const b = Buffer.from(String(cmd.hex || ''), 'hex');
+    if (roomSocket && roomSocket.readyState === 1) {
+      roomSocket.send(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength));
+      log('sendroom', cmd.hex);
+    } else {
+      log('sendroom: no room socket');
+    }
+  }
   else if (cmd.type === 'fuelpacket') {
     const missing = [];
     for (let i = 0; i < fuelPacketCount; i++) if (!fuelPacket.has(i)) missing.push(i);
