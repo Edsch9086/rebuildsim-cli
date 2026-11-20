@@ -42,8 +42,8 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Live server handshake + room list | ✅ works |
 | Create room / join room by code | ✅ name/room-code UI retried; join timeout still applies |
 | Ready / start match | ✅ joiner auto-ready; test host can start |
-| Fuel positions from wasm memory | not used for output; the game also keeps a static start-position table |
-| Fuel positions from server packets | ✅ live positions/presence (authoritative); memory fallback |
+| Fuel positions from wasm memory | ✅ live array (all ground + airborne); static start table rejected |
+| Fuel positions from server packets | ✅ present records locate/verify the live array; absent records are airborne-only |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
 | Robot heading | ✅ chassis yaw; `turret_heading` exposed separately |
 | Robot identity | ✅ `me` + `is_me` by username (1-10 ASCII) |

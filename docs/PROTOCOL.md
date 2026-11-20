@@ -264,9 +264,10 @@ u16 z             // bottom; add ~0.045 m for centre
 ```
 
 - The game keeps **two copies**: a static start-position table and the live
-  simulation array. Both match the initial packet. The engine therefore uses the
-  latest `0x42` record for each id as the authoritative position/presence source;
-  the memory array is not used for fuel output.
+  simulation array (ground + airborne fuel). The engine uses the **live memory
+  array** and locates/verifies it with the **present** `0x42` records (airborne
+  fuel); the static copy fails those probes. `0x42` absent records are not
+  ground-absence evidence, and the packet alone only shows airborne fuel.
 - Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
   for that 4-byte pair, set `base = hit - 1 - id*7`, and verify mixed recent
   present/absent packet records against the base. The mixed probes reject a

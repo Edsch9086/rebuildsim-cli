@@ -116,7 +116,7 @@ pub struct GameState {
     pub fuel: Vec<Fuel>,
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
     pub fuel_bin: bool,          // fuel arrived on the binary channel
-    pub fuel_ok: bool,           // true once packet state settles or memory is verified
+    pub fuel_ok: bool,           // true when the live memory array is verified
     pub fuel_source: Option<String>, // "packet" | "scan"
     pub ws_open: u32,
     pub ws_closed: u32,
@@ -195,13 +195,14 @@ pub struct Robot {
 }
 ```
 
-Fuel positions and `present` flags come from the latest `0x42` packet record for
-each id. The wasm memory copy is **not** used for fuel output because the game
-keeps both a static start-position table and the live simulation array. The
-engine reports `fuel_source: "packet"`; ids the server did not send are emitted
-as absent. `fuel_ok` is true once the live packet state has settled (no
-new/changed records for 750 ms) and a full `fuel_count` array is emitted; before
-that it is false. `fuel.x/y/z` are center positions
+Fuel positions and `present` flags come from the **live wasm memory array**,
+which contains both ground and airborne fuel. The game also keeps a static
+start-position table; the engine locates/verifies the live array using the
+**present** `0x42` records (airborne fuel) and rejects the static copy. `0x42`
+absent records are not treated as ground-absence evidence. `fuel_source` is
+`"packet"` (located from a packet probe) or `"scan"`; `fuel_ok` is true when the
+live array is verified and a full `fuel_count` array is emitted. Packet records
+still supply `count`, `flags`, and velocities. `fuel.x/y/z` are center positions
 (packet z, or memory bottom + 0.045 m).
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at

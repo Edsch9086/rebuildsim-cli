@@ -130,10 +130,11 @@ u16 z              // bottom; add ~0.045 m for the centre
 ```
 
 The game has both a **static start-position table** and the **live simulation
-array**; both match at match start. The engine now uses the latest `0x42` record
-for each id as the authoritative position/presence source; the memory array is
-not used for fuel output. Packet matching with mixed present/absent probes is
-kept in the locator diagnostics; the static copy fails once fuel is consumed. Validated: a 25% rule produced
+array**; both match at match start. The engine uses the **live memory array**
+(ground + airborne) and locates/verifies it with the **present** `0x42` records
+(airborne fuel); the static copy fails those probes. `0x42` absent records are
+not ground-absence evidence; a packet-only view shows only midair fuel. The
+locator's mixed-probe diagnostics remain available. Validated: a 25% rule produced
 **150 fuel**, a 50% rule 255, and the default build 456. The fallback run scan
 checks up to 64 consecutive records plus a spread of later records, so it is not
 limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, `fuel_source`, and all `count`
