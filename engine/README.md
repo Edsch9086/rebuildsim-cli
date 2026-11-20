@@ -209,9 +209,13 @@ Playwright.
   process per bot. The **public server has a per-IP connection limit**; a second
   headless engine from the same IP was closed in testing. Use the local server
   or separate IPs for six-bot runs.
-- A dropped room WebSocket is fatal for the current match; the engine reports it
-  but does not auto-reconnect. The Rust CLI exits 5 on state timeout and 6 on
-  room-WS close (disable the latter with `--allow-ws-close`). In the lobby,
+- A dropped **room** WebSocket is fatal for the current match; the engine reports
+  it but does not auto-reconnect. Auxiliary room-list/queue sockets close with
+  `1006` routinely; they are logged as `ws aux close` and ignored, and the
+  driver loop continues. `--wslog` records close entries with `code`, `reason`,
+  `wasClean`, and `room`. The Rust CLI exits 5 on state timeout and 6 only on
+  the authoritative room-WS close (disable the latter with
+  `--allow-ws-close`). In the lobby,
   `--restart-on-exit` can respawn/rejoin the same room code (up to
   `--max-restarts`, default 3); it is disabled after a match starts until a
   fresh lobby/room event arrives.
