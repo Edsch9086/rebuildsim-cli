@@ -42,7 +42,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Live server handshake + room list | ✅ works |
 | Create room / join room by code | ✅ name/room-code UI retried; join timeout still applies |
 | Ready / start match | ✅ joiner auto-ready; test host can start |
-| Fuel positions from wasm memory | ✅ fallback only before the first `0x42` chunk; may be a static start table |
+| Fuel positions from wasm memory | not used for output; the game also keeps a static start-position table |
 | Fuel positions from server packets | ✅ live positions/presence (authoritative); memory fallback |
 | Robot pose (predicted) | ✅ render copy ~48 Hz; acked fallback |
 | Robot heading | ✅ chassis yaw; `turret_heading` exposed separately |

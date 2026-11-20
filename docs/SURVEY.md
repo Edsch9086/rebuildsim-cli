@@ -131,9 +131,9 @@ u16 z              // bottom; add ~0.045 m for the centre
 
 The game has both a **static start-position table** and the **live simulation
 array**; both match at match start. The engine now uses the latest `0x42` record
-for each id as the authoritative position/presence source, with memory only as a
-pre-first-chunk fallback. Packet matching with mixed present/absent probes is
-kept for the fallback; the static copy fails once fuel is consumed. Validated: a 25% rule produced
+for each id as the authoritative position/presence source; the memory array is
+not used for fuel output. Packet matching with mixed present/absent probes is
+kept in the locator diagnostics; the static copy fails once fuel is consumed. Validated: a 25% rule produced
 **150 fuel**, a 50% rule 255, and the default build 456. The fallback run scan
 checks up to 64 consecutive records plus a spread of later records, so it is not
 limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, `fuel_source`, and all `count`

@@ -1072,19 +1072,6 @@ function parseFuelPacket(buf) {
   }
   if (added) fuelPacketLastAddedAt = Date.now();
   if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
-  if (!fuelAddr && fuelPacket.size && [...fuelPacket.values()].some(r => r.count > 0)) {
-    const now = Date.now();
-    if (now - lastFuelLocate > 250) {
-      lastFuelLocate = now;
-      if (locateFuelFromPacket()) {
-        fuelLocateFails = 0;
-        fuelScanCursor = 0x10000;
-      } else {
-        fuelLocateFails++;
-        lastFuelLocate = Date.now() + (fuelLocateFails >= 4 ? 2000 : 500);
-      }
-    }
-  }
 }
 
 function fuelCandidateBases() {
@@ -1379,37 +1366,19 @@ function fuelPacketSettled() {
 function readFuel() {
   refreshFrame();
   if (!fuelPacketCount) return [];
-  const a = mem ? u8() : null;
   const count = fuelPacketCount;
-  if (fuelAddr && a && fuelAddr + count * 7 > a.length) {
-    fuelAddr = 0;
-    fuelSource = null;
-    fuelVerified = false;
-    fuelZeroSince = 0;
-    fuelScanCursor = 0x10000;
-    lastFuelLocate = 0;
-    fuelLocateFails = 0;
-  }
   const out = [];
   for (let i = 0; i < count; i++) {
     const p = fuelPacket.get(i);
     let present, x, y, z;
     if (p) {
-      // The 0x42 packet is the live server state. Prefer it over the memory
-      // copy so the static start-position table cannot mask the live array.
+      // The 0x42 packet is the live server state. The wasm memory array can be
+      // the static start-position table, so it is not used for output.
       present = p.count > 0;
       x = (p.x - 0x8000) / 4096;
       y = (p.y - 0x8000) / 4096;
       z = (p.z - 0x8000) / 4096; // packet z is already the centre
-    } else if (fuelPacket.size === 0 && fuelAddr && a) {
-      // Before the first 0x42 chunk arrives, fall back to the memory copy.
-      const off = fuelAddr + i * 7;
-      present = a[off] === 1;
-      x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
-      y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
-      z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
     } else {
-      // We have live packet data and no record for this id: it is not present.
       present = false;
       x = 0; y = 0; z = 0;
     }
@@ -2402,9 +2371,9 @@ setInterval(() => {
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: (() => { const our = roomSeats.find(s => s.name === OPT.username); return (our && readRobotCapacity(our.robot_id, our.robot_class)) ?? OPT.hopperCapacity; })(),
     intake_active: me ? me.intake_active : null,
-    fuel_ok: (fuelPacketSettled() || (fuelPacket.size === 0 && fuelVerified))
-      && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
-    fuel_source: fuelPacket.size > 0 ? 'packet' : fuelSource,
+    fuel_ok: fuelPacketSettled() && fuelPacketCount > 0
+      && fuel.length === fuelPacketCount,
+    fuel_source: fuelPacket.size > 0 ? 'packet' : null,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }

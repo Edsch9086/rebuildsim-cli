@@ -196,12 +196,12 @@ pub struct Robot {
 ```
 
 Fuel positions and `present` flags come from the latest `0x42` packet record for
-each id; the wasm memory copy is only a fallback before the first chunk. This
-matters because the game keeps both a static start-position table and the live
-simulation array. The engine reports `fuel_source: "packet"` once packet data is
-available; ids the server did not send are emitted as absent. `fuel_ok` is true
-once the live packet state has settled (no new/changed records for 750 ms) and a
-full `fuel_count` array is emitted; before that it is false. `fuel.x/y/z` are center positions
+each id. The wasm memory copy is **not** used for fuel output because the game
+keeps both a static start-position table and the live simulation array. The
+engine reports `fuel_source: "packet"`; ids the server did not send are emitted
+as absent. `fuel_ok` is true once the live packet state has settled (no
+new/changed records for 750 ms) and a full `fuel_count` array is emitted; before
+that it is false. `fuel.x/y/z` are center positions
 (packet z, or memory bottom + 0.045 m).
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
