@@ -116,7 +116,7 @@ pub struct GameState {
     pub fuel: Vec<Fuel>,
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
     pub fuel_bin: bool,          // fuel arrived on the binary channel
-    pub fuel_ok: bool,           // false if fuel_count is known but unreadable
+    pub fuel_ok: bool,           // true once packet state settles or memory is verified
     pub fuel_source: Option<String>, // "packet" | "scan"
     pub ws_open: u32,
     pub ws_closed: u32,
@@ -200,7 +200,8 @@ each id; the wasm memory copy is only a fallback before the first chunk. This
 matters because the game keeps both a static start-position table and the live
 simulation array. The engine reports `fuel_source: "packet"` once packet data is
 available; ids the server did not send are emitted as absent. `fuel_ok` is true
-when a full `fuel_count` array is emitted. `fuel.x/y/z` are center positions
+once the live packet state has settled (no new/changed records for 750 ms) and a
+full `fuel_count` array is emitted; before that it is false. `fuel.x/y/z` are center positions
 (packet z, or memory bottom + 0.045 m).
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at

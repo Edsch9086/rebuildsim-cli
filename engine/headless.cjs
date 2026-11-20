@@ -507,6 +507,7 @@ function resetMatchState(clearRoster = false) {
   fuelVerified = false;
   fuelPacket.clear();
   fuelPacketCount = 0;
+  fuelPacketLastAddedAt = 0;
   allianceByName.clear();
   allianceSourceByName.clear();
   ourAllianceCache = null;
@@ -1014,6 +1015,7 @@ let fuelAddr = 0;
 let lastFuelScan = 0;
 let lastFuelVerify = 0;
 let fuelPacketCount = 0;
+let fuelPacketLastAddedAt = 0;
 let fuelSource = null;
 let fuelVerified = false;
 let fuelVerifyFails = 0;
@@ -1039,6 +1041,7 @@ function parseFuelPacket(buf) {
     fuelVerified = false;
     fuelVerifyFails = 0;
     fuelZeroSince = 0;
+    fuelPacketLastAddedAt = 0;
     fuelPacket.clear();
   }
   let added = 0;
@@ -1047,7 +1050,7 @@ function parseFuelPacket(buf) {
     if (off + 24 > buf.length) break;
     const id = buf.readUInt16LE(off);
     if (id >= total && total > 0) continue;
-    fuelPacket.set(id, {
+    const rec = {
       id,
       count: buf.readUInt16LE(off + 2),
       flags: buf.readUInt32LE(off + 8),
@@ -1058,9 +1061,16 @@ function parseFuelPacket(buf) {
       vx: buf.readUInt16LE(off + 18),
       vy: buf.readUInt16LE(off + 20),
       vz: buf.readUInt16LE(off + 22),
-    });
-    added++;
+    };
+    const prev = fuelPacket.get(id);
+    if (!prev || prev.count !== rec.count || prev.flags !== rec.flags
+        || prev.x !== rec.x || prev.y !== rec.y || prev.z !== rec.z
+        || prev.vx !== rec.vx || prev.vy !== rec.vy || prev.vz !== rec.vz) {
+      added++;
+    }
+    fuelPacket.set(id, rec);
   }
+  if (added) fuelPacketLastAddedAt = Date.now();
   if (!initialFuelPacket && added) initialFuelPacket = [...fuelPacket.values()].map(r => ({ ...r }));
   if (!fuelAddr && fuelPacket.size && [...fuelPacket.values()].some(r => r.count > 0)) {
     const now = Date.now();
@@ -1360,6 +1370,10 @@ function maybeScanFuel() {
   if (now - lastFuelScan <= 2000) return;
   lastFuelScan = now;
   if (!findFuelArray()) lastFuelScan = Date.now();
+}
+
+function fuelPacketSettled() {
+  return fuelPacket.size > 0 && Date.now() - fuelPacketLastAddedAt > 750;
 }
 
 function readFuel() {
@@ -2388,8 +2402,8 @@ setInterval(() => {
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: (() => { const our = roomSeats.find(s => s.name === OPT.username); return (our && readRobotCapacity(our.robot_id, our.robot_class)) ?? OPT.hopperCapacity; })(),
     intake_active: me ? me.intake_active : null,
-    fuel_ok: (fuelPacket.size > 0 || fuelVerified) && fuelPacketCount > 0
-      && fuel.length === fuelPacketCount,
+    fuel_ok: (fuelPacketSettled() || (fuelPacket.size === 0 && fuelVerified))
+      && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
     fuel_source: fuelPacket.size > 0 ? 'packet' : fuelSource,
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
