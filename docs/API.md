@@ -116,8 +116,8 @@ pub struct GameState {
     pub fuel: Vec<Fuel>,
     pub fuel_count: Option<u16>, // total fuel for this match (1..~4300)
     pub fuel_bin: bool,          // fuel arrived on the binary channel
-    pub fuel_ok: bool,           // true when the live memory array is verified
-    pub fuel_source: Option<String>, // "packet" | "scan"
+    pub fuel_ok: bool,           // true when the selected fuel array is verified
+    pub fuel_source: Option<String>, // "packet" | "scan" | "table"
     pub ws_open: u32,
     pub ws_closed: u32,
 }
@@ -195,15 +195,18 @@ pub struct Robot {
 }
 ```
 
-Fuel positions and `present` flags come from the **live wasm memory array**,
-which contains both ground and airborne fuel. The game also keeps a static
-start-position table; the engine locates/verifies the live array using the
-**present** `0x42` records (airborne fuel) and rejects the static copy. `0x42`
-absent records are not treated as ground-absence evidence. `fuel_source` is
-`"packet"` (located from a packet probe) or `"scan"`; `fuel_ok` is true when the
-live array is verified and a full `fuel_count` array is emitted. Packet records
-still supply `count`, `flags`, and velocities. `fuel.x/y/z` are center positions
-(packet z, or memory bottom + 0.045 m).
+Fuel positions come from the **live 6-byte wasm array** (x/y/z, offset-binary).
+The game also keeps a 7-byte start/presence table and the `0x42` packet. At
+match start the engine locates the live array from **present** `0x42` records
+(raw x/y pattern, `base = hit - id*6`, 5–8 probe validation). It re-verifies the
+base every ~2 s against up to 5 present records with a lag-tolerant gate;
+`0x42` absent records are not treated as ground-absence evidence. `present` and
+`count` still come from the 7-byte table and packet, and packet velocities/flags
+are merged in JSON mode. If the live array is not found, the engine falls back
+to the 7-byte table. `fuel_source` is `"packet"` or `"scan"` for the live array,
+`"table"` for the fallback; `fuel_ok` is true when the selected array is
+verified and a full `fuel_count` array is emitted. `fuel.x/y/z` are center
+positions (live/table z + 0.045 m, or packet z).
 
 `hopper_fuel` is the local robot's held fuel, read from the player struct at
 name+0x4b and decrements while shooting. Hopper capacity is **robot-specific**

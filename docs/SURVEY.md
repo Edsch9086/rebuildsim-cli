@@ -120,7 +120,7 @@ u16  records in this chunk (48)
 ```
 
 The server cycles through all IDs in 48-record chunks. The wasm memory contains
-a parallel `total × 7-byte` array:
+a `total × 7-byte` start/presence table:
 
 ```
 u8  present
@@ -129,16 +129,28 @@ u16 y
 u16 z              // bottom; add ~0.045 m for the centre
 ```
 
-The game has both a **static start-position table** and the **live simulation
-array**; both match at match start. The engine uses the **live memory array**
-(ground + airborne) and locates/verifies it with the **present** `0x42` records
-(airborne fuel); the static copy fails those probes. `0x42` absent records are
-not ground-absence evidence; a packet-only view shows only midair fuel. The
-locator's mixed-probe diagnostics remain available. Validated: a 25% rule produced
-**150 fuel**, a 50% rule 255, and the default build 456. The fallback run scan
-checks up to 64 consecutive records plus a spread of later records, so it is not
-limited to 2,048 fuel. The engine emits `fuel_count`, `fuel_ok`, `fuel_source`, and all `count`
-records (with `present`), and merges the packet's velocities/flags in JSON mode.
+and a `total × 6-byte` live simulation array:
+
+```
+u16 x
+u16 y
+u16 z              // bottom; add ~0.045 m for the centre
+```
+
+The game has both a **7-byte start/presence table** and a **6-byte live
+simulation array**; both match at match start, but only the 6-byte array's
+positions move. The engine locates the live array from **present** `0x42`
+records (raw x/y pattern, `base = hit - id*6`, 5–8 probe validation) and
+re-verifies it every ~2 s with a lag-tolerant gate. `0x42` absent records are
+not ground-absence evidence; a packet-only view shows only midair/pushed fuel.
+If the live array is not found, the 7-byte table is the fallback for positions
+and `present`/`count`. The full-heap scan checks up to 64 consecutive table
+records plus a spread of later records, so it is not limited to 2,048 fuel.
+Validated: a 25% rule produced **150 fuel**, a 50% rule 255, and the default
+build 456. A driven center-pile sweep changed 380 live fuel positions while the
+hopper rose 8→51, and a spectator from match start saw 388 fuel positions move.
+The engine emits `fuel_count`, `fuel_ok`, `fuel_source`, and all `count` records
+(with `present`), and merges the packet's velocities/flags in JSON mode.
 For 4,000+ fuel the JSON state is large, so the engine has an opt-in `--binary`
 framing: packed 7-byte fuel records (plus a `RSB1` header) immediately before the
 JSON state, and the Rust `Engine` reattaches them. Binary records carry only
@@ -325,6 +337,11 @@ The headless engine drives the game with synthetic DOM events:
   self-move as `room_action` `action: "bench"`, `by: "self"` (outgoing `0x09`).
   The referee `SIDELINE` slot `(190, 530)` is host-only; a non-host cannot take
   it or move itself back to a driver seat.
+- A spectator that joins a **running** match misses the pre-auto countdown, so
+  the engine accepts the live positive clock once the match has been active for
+  a second. The running clock is available immediately; the client may not
+  populate its local robot/fuel sim until the next match, so mid-match
+  spectator robot/fuel telemetry remains best-effort.
 
 The 1280×720 UI coordinates are in `docs/PROTOCOL.md`; the game lays out
 differently at 1280×800. Use 720p for the headless engine.

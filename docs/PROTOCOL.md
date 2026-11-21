@@ -256,6 +256,16 @@ signature scanning, not fixed addresses.
   layout, and may move when the fuel count changes.
 - Record:
 
+Live simulation array (preferred; 6 bytes per record):
+
+```
+u16 x             // (v - 0x8000) / 4096
+u16 y
+u16 z             // bottom; add ~0.045 m for centre
+```
+
+Start/presence table (7 bytes per record; fallback and presence/count):
+
 ```
 u8  present       // 0/1
 u16 x             // (v - 0x8000) / 4096
@@ -263,22 +273,21 @@ u16 y
 u16 z             // bottom; add ~0.045 m for centre
 ```
 
-- The game keeps **two copies**: a static start-position table and the live
-  simulation array (ground + airborne fuel). The engine uses the **live memory
-  array** and locates/verifies it with the **present** `0x42` records (airborne
-  fuel); the static copy fails those probes. `0x42` absent records are not
-  ground-absence evidence, and the packet alone only shows airborne fuel.
-- Locate by packet matching: take a recent `0x42` record's `x,y`, search memory
-  for that 4-byte pair, set `base = hit - 1 - id*7`, and verify mixed recent
-  present/absent packet records against the base. The mixed probes reject a
-  static start table once fuel has been consumed. Packet `z` is the fuel centre while the memory
-  record stores the bottom, so compare `mz + 0.045 m` to packet `z`.
-- The cached base is re-verified against packet records every ~2 s and relocated
-  if it moved.
-- Fallback: scan for 64 consecutive valid records (`present ∈ {0,1}`, `z` in
-  `[30000, 40000]`; loose enough for elevated hub fuel), then correlate a spread
-  of records against recent `0x42` packets. This works for counts above 2,048
-  over the full wasm heap.
+- The game keeps **two copies**: the live 6-byte simulation array and the
+  7-byte start/presence table. At match start they agree. Only the 6-byte
+  array's positions change as fuel is pushed or collected.
+- Locate the live array at match start from a **present** `0x42` record: use
+  its raw `x,y` as a 4-byte pattern, scan memory, set `base = hit - id*6`, and
+  validate 5–8 probes with `|x - p.x| <= 3`, `|y - p.y| <= 3`,
+  `|(z + 184) - p.z| <= 5`. `0x42` absent records are not ground-absence
+  evidence, and the packet alone only shows airborne/pushed fuel.
+- Re-verify the cached base every ~2 s against up to 5 present records. Moving
+  fuel lags the packet, so the re-check uses a lag-tolerant gate and majority
+  match; relocate after two mismatching sweeps.
+- Fallback: if the live array is not found, use the 7-byte table's positions
+  and its `present`/`count`. A full-heap scan for 64 consecutive table records
+  (`present ∈ {0,1}`, `z` in `[30000, 40000]`) plus packet correlation remains
+  available for counts above 2,048.
 - The packet id equals the array index (id 0 → record 0). The engine emits
   `fuel_count`, `fuel_ok`, `fuel_source`, and all `count` records, merging packet
   velocities/flags in JSON mode.

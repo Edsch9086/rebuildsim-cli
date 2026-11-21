@@ -512,6 +512,13 @@ function resetMatchState(clearRoster = false) {
   fuelScanCursor = 0x10000;
   fuelSource = null;
   fuelVerified = false;
+  liveFuelAddr = 0;
+  liveFuelSource = null;
+  liveFuelVerified = false;
+  liveFuelLastVerify = 0;
+  liveFuelVerifyFails = 0;
+  liveFuelLocateFails = 0;
+  lastLiveFuelLocate = 0;
   fuelPacket.clear();
   fuelPacketCount = 0;
   allianceByName.clear();
@@ -837,7 +844,14 @@ function parse41(buf) {
     const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
     let t = dv.getFloat32(10, true);
     if (!Number.isFinite(t)) t = null;
-    if (t != null && (sawAutoClock || t >= 143.0 || t <= 0.05)) {
+    // A spectator that joins mid-match never sees the pre-auto countdown, so
+    // sawAutoClock stays false and this guard would reject the live positive
+    // clock forever. Once the match has been active for a moment, accept the
+    // current clock; a stale frame from the previous match is gone by then.
+    const midMatchSpectator = flow.match && matchStarted && role === 'spectator'
+      && matchStartedAt && Date.now() - matchStartedAt > 1000;
+    if (t != null && (sawAutoClock || t >= 143.0 || t <= 0.05
+        || (midMatchSpectator && t > 0.05 && t < 143.0))) {
       if (t !== last41Clock) {
         last41Clock = t;
         lastClockChangeAt = Date.now();
@@ -1109,6 +1123,16 @@ const FUEL_Z_OFFSET = Math.round(0.045 * 4096);
 let lastFuelLocate = 0;
 let fuelLocateFails = 0;
 let fuelScanCursor = 0x10000;
+// The 7-byte array above is the start/presence table. The simulation keeps a
+// separate 6-byte live position array: x u16, y u16, z u16, all offset-binary.
+let liveFuelAddr = 0;
+let liveFuelSource = null;
+let liveFuelVerified = false;
+let liveFuelLastVerify = 0;
+let liveFuelVerifyFails = 0;
+let liveFuelLocateFails = 0;
+let lastLiveFuelLocate = 0;
+const FUEL_TABLE_ONLY = process.env.RB_FUEL_TABLE_ONLY === '1';
 const fuelPacket = new Map();
 let initialFuelPacket = null;
 
@@ -1126,7 +1150,14 @@ function parseFuelPacket(buf) {
     fuelVerified = false;
     fuelVerifyFails = 0;
     fuelZeroSince = 0;
-      fuelPacket.clear();
+    liveFuelAddr = 0;
+    liveFuelSource = null;
+    liveFuelVerified = false;
+    liveFuelLastVerify = 0;
+    liveFuelVerifyFails = 0;
+    liveFuelLocateFails = 0;
+    lastLiveFuelLocate = 0;
+    fuelPacket.clear();
   }
   let added = 0;
   for (let i = 0; i < n; i++) {
@@ -1268,34 +1299,133 @@ function fuelProbeResult(a, off, p, tol) {
   return 'mismatch';
 }
 
-function verifyFuelBase() {
-  if (!fuelAddr || !fuelPacket.size || !mem) return false;
+function liveFuelProbeResult(a, off, p, tol = 3, ztol = 5) {
+  if (off < 0 || off + 6 > a.length) return 'invalid';
+  const x = a[off] | (a[off + 1] << 8);
+  const y = a[off + 2] | (a[off + 3] << 8);
+  const z = a[off + 4] | (a[off + 5] << 8);
+  if (Math.abs(x - p.x) <= tol && Math.abs(y - p.y) <= tol
+      && Math.abs((z + FUEL_Z_OFFSET) - p.z) <= ztol) return 'present';
+  return 'mismatch';
+}
+
+function locateLiveFuelFromPacket() {
+  if (!mem || !fuelPacketCount) return 0;
+  const now = Date.now();
+  const backoff = liveFuelLocateFails >= 4 ? 10000 : 2000;
+  if (now - lastLiveFuelLocate < backoff) return 0;
+  lastLiveFuelLocate = now;
+  const present = [...fuelPacket.values()]
+    .filter(r => r.id < fuelPacketCount && r.count > 0)
+    .sort((a, b) => b.seen - a.seen);
+  const probes = present.slice(0, 8);
+  // 0x42 present records track airborne fuel. A match with only a couple in
+  // flight is not enough to disambiguate a 6-byte run from random heap data.
+  if (probes.length < 4) return 0;
   const a = u8();
-  const allRecords = [...fuelPacket.values()].sort((a, b) => b.seen - a.seen);
-  const presentRecords = allRecords.filter(r => r.count > 0);
-  // 0x42 present records track airborne fuel; the memory live array has both
-  // ground and airborne fuel, so absent packet records are not evidence that
-  // a memory ground record is stale.
-  if (!presentRecords.length) return true;
-  const probes = presentRecords.slice(0, 5);
-  let checked = 0, ok = 0, presentChecked = 0, presentOk = 0;
-  for (const p of probes) {
-    const res = fuelProbeResult(a, fuelAddr + p.id * 7, p, 3);
+  const hay = Buffer.from(a.buffer, a.byteOffset, a.byteLength);
+  const deadline = now + 800;
+  const pat = Buffer.alloc(4);
+  for (const probe of probes.slice(0, 3)) {
+    pat.writeUInt16LE(probe.x, 0);
+    pat.writeUInt16LE(probe.y, 2);
+    let pos = 0, hits = 0;
+    while (hits++ < 250) {
+      if (Date.now() > deadline) {
+        log('live fuel locate timed out');
+        return 0;
+      }
+      const hit = hay.indexOf(pat, pos);
+      if (hit < 0) break;
+      pos = hit + 1;
+      const base = hit - probe.id * 6;
+      if (base < 0 || base + fuelPacketCount * 6 > a.length) continue;
+      let checked = 0, ok = 0, inFieldCount = 0;
+      for (const q of probes) {
+        const res = liveFuelProbeResult(a, base + q.id * 6, q);
+        if (res === 'invalid') break;
+        checked++;
+        if (res === 'present') {
+          ok++;
+          const lo = base + q.id * 6;
+          const lx = ((a[lo] | (a[lo + 1] << 8)) - 0x8000) / 4096;
+          const ly = ((a[lo + 2] | (a[lo + 3] << 8)) - 0x8000) / 4096;
+          if (inField(lx, ly)) inFieldCount++;
+        }
+      }
+      if (checked >= Math.min(5, probes.length)
+          && ok >= Math.ceil(checked * 0.8)
+          && inFieldCount >= Math.max(1, Math.ceil(ok * 0.6))) {
+        liveFuelAddr = base;
+        liveFuelSource = 'packet';
+        liveFuelVerified = true;
+        liveFuelVerifyFails = 0;
+        liveFuelLocateFails = 0;
+        lastLiveFuelLocate = now;
+        log('live fuel array at', '0x' + base.toString(16), 'count', fuelPacketCount,
+          'probes', ok + '/' + checked);
+        return base;
+      }
+    }
+  }
+  liveFuelLocateFails++;
+  return 0;
+}
+
+function verifyLiveFuel() {
+  if (!liveFuelAddr || !mem || !fuelPacket.size) return false;
+  const a = u8();
+  if (liveFuelAddr + fuelPacketCount * 6 > a.length) return false;
+  const present = [...fuelPacket.values()]
+    .filter(r => r.id < fuelPacketCount && r.count > 0)
+    .sort((a, b) => b.seen - a.seen)
+    .slice(0, 5);
+  if (present.length < 2) return true;
+  let checked = 0, ok = 0;
+  for (const p of present) {
+    const off = liveFuelAddr + p.id * 6;
+    // Present 0x42 records are moving/airborne, so the live sim can be a
+    // frame or two ahead of the packet. Use a loose gate here; a wrong base
+    // still fails the field/majority checks below.
+    const res = liveFuelProbeResult(a, off, p, 3000, 600);
     if (res === 'invalid') return false;
     checked++;
-    if (res === 'absent') { ok++; continue; }
-    presentChecked++;
-    if (res === 'present') { ok++; presentOk++; }
+    if (res === 'present') ok++;
+    else if (OPT.debug) {
+      const x = a[off] | (a[off + 1] << 8);
+      const y = a[off + 2] | (a[off + 3] << 8);
+      const z = a[off + 4] | (a[off + 5] << 8);
+      log('live fuel probe mismatch', p.id, 'packet', p.x, p.y, p.z,
+        'live', x, y, z, 'base', '0x' + liveFuelAddr.toString(16));
+    }
   }
-  const need = Math.min(3, probes.length);
-  if (checked < need) return false;
-  if (presentChecked > 0) return presentOk >= Math.max(1, Math.ceil(presentChecked * 0.6));
-  // No present packet probe: the live array must be absent everywhere at this
-  // base. This is O(fuel_count) and prevents phantom present records at endgame.
-  if (checked < need) return false;
-  for (let id = 0; id < fuelPacketCount; id++) {
+  return ok >= Math.max(2, Math.ceil(checked * 0.6));
+}
+
+function verifyFuelBase() {
+  if (!fuelAddr || !mem || !fuelPacketCount) return false;
+  const a = u8();
+  if (fuelAddr + fuelPacketCount * 7 > a.length) return false;
+  // The 7-byte table holds start positions, so it cannot be verified against
+  // moving packet positions. Check its structure instead: a contiguous block
+  // of small present/count bytes and in-field start coordinates. This keeps
+  // table fallback alive after fuel moves while still detecting a stale base.
+  const ids = [];
+  const probe = Math.min(fuelPacketCount, 64);
+  for (let i = 0; i < probe; i++) ids.push(i);
+  for (const id of [fuelPacketCount - 1, Math.floor(fuelPacketCount / 2),
+    Math.floor(fuelPacketCount / 3), Math.floor(fuelPacketCount * 2 / 3)]) {
+    if (id >= 0 && id < fuelPacketCount && !ids.includes(id)) ids.push(id);
+  }
+  for (const id of ids) {
     const off = fuelAddr + id * 7;
-    if (off + 7 > a.length || a[off] !== 0) return false;
+    const present = a[off];
+    if (present > 32) return false;
+    if (!present) continue;
+    const x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
+    const y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
+    const z = a[off + 5] | (a[off + 6] << 8);
+    if (!inField(x, y) || z < 28000 || z > 50000) return false;
   }
   return true;
 }
@@ -1437,19 +1567,26 @@ function findFuelArray() {
 }
 
 function maybeScanFuel() {
-  if (!matchStarted || !mem || fuelAddr) return;
+  if (!matchStarted || !mem) return;
   const now = Date.now();
   if (now - lastFuelScan <= 2000) return;
   lastFuelScan = now;
-  if (!findFuelArray()) lastFuelScan = Date.now();
+  if (!fuelAddr) findFuelArray();
+  if (!FUEL_TABLE_ONLY && !liveFuelAddr) locateLiveFuelFromPacket();
 }
 
 function readFuel() {
   refreshFrame();
-  if (!fuelAddr || !mem || !fuelPacketCount) return [];
+  if (!mem || !fuelPacketCount) return [];
   const a = u8();
   const count = fuelPacketCount;
-  if (fuelAddr + count * 7 > a.length) {
+  if (liveFuelAddr && liveFuelAddr + count * 6 > a.length) {
+    log('live fuel base out of bounds; relocating');
+    liveFuelAddr = 0;
+    liveFuelSource = null;
+    liveFuelVerified = false;
+  }
+  if (fuelAddr && fuelAddr + count * 7 > a.length) {
     fuelAddr = 0;
     fuelSource = null;
     fuelVerified = false;
@@ -1457,18 +1594,26 @@ function readFuel() {
     fuelScanCursor = 0x10000;
     lastFuelLocate = 0;
     fuelLocateFails = 0;
-    return [];
   }
+  if (!liveFuelAddr && !fuelAddr) return [];
   const out = [];
   for (let i = 0; i < count; i++) {
-    const off = fuelAddr + i * 7;
     const p = fuelPacket.get(i);
-    let present = a[off] === 1;
-    let x = ((a[off + 1] | (a[off + 2] << 8)) - 0x8000) / 4096;
-    let y = ((a[off + 3] | (a[off + 4] << 8)) - 0x8000) / 4096;
-    let z = ((a[off + 5] | (a[off + 6] << 8)) - 0x8000) / 4096 + 0.045;
-    let countVal = present ? 1 : 0;
+    let present = false;
+    let countVal = 0;
     let flags = 0, vx = 0, vy = 0, vz = 0;
+    let havePos = false, x = 0, y = 0, z = 0;
+
+    // Presence/count come from the 7-byte table and the packet. The table's
+    // x/y/z are start positions; only use them when the live array is absent.
+    if (fuelAddr) {
+      const to = fuelAddr + i * 7;
+      const tcount = a[to];
+      if (tcount > 0) {
+        present = true;
+        countVal = tcount;
+      }
+    }
     if (p) {
       flags = p.flags;
       vx = (p.vx - 0x8000) / 4096;
@@ -1476,19 +1621,46 @@ function readFuel() {
       vz = (p.vz - 0x8000) / 4096;
       if (p.count > 0) {
         present = true;
-        countVal = p.count;
-        if (a[off] !== 1) {
-          // Airborne fuel may be newer in the packet than the memory copy.
-          x = (p.x - 0x8000) / 4096;
-          y = (p.y - 0x8000) / 4096;
-          z = (p.z - 0x8000) / 4096;
-        }
-      } else if (present) {
-        // The packet only reports airborne fuel; a present ground record is
-        // still one piece even when the packet count is zero.
-        countVal = 1;
+        if (p.count > countVal) countVal = p.count;
       }
     }
+
+    if (liveFuelAddr) {
+      const lo = liveFuelAddr + i * 6;
+      const lx = ((a[lo] | (a[lo + 1] << 8)) - 0x8000) / 4096;
+      const ly = ((a[lo + 2] | (a[lo + 3] << 8)) - 0x8000) / 4096;
+      const lz = ((a[lo + 4] | (a[lo + 5] << 8)) - 0x8000) / 4096 + 0.045;
+      if (inField(lx, ly) && lz > -0.5 && lz < 5) {
+        x = lx; y = ly; z = lz;
+        havePos = true;
+        // The live array is present for ground fuel even when the 0x42
+        // packet only carries airborne records.
+        if (!fuelAddr) {
+          present = true;
+          if (countVal < 1) countVal = 1;
+        }
+      }
+    }
+    if (!havePos && p && p.count > 0) {
+      // Fall back to the packet position for airborne fuel.
+      x = (p.x - 0x8000) / 4096;
+      y = (p.y - 0x8000) / 4096;
+      z = (p.z - 0x8000) / 4096;
+      havePos = true;
+    }
+    if (!havePos && fuelAddr) {
+      const to = fuelAddr + i * 7;
+      x = ((a[to + 1] | (a[to + 2] << 8)) - 0x8000) / 4096;
+      y = ((a[to + 3] | (a[to + 4] << 8)) - 0x8000) / 4096;
+      z = ((a[to + 5] | (a[to + 6] << 8)) - 0x8000) / 4096 + 0.045;
+      havePos = true;
+    }
+    if (present && !havePos && p) {
+      x = (p.x - 0x8000) / 4096;
+      y = (p.y - 0x8000) / 4096;
+      z = (p.z - 0x8000) / 4096;
+    }
+    if (present && countVal < 1) countVal = 1;
     const fp = allianceVec(x, y);
     const fv = allianceVec(vx, vy);
     out.push({
@@ -1496,7 +1668,7 @@ function readFuel() {
       x: +fp.x.toFixed(4), y: +fp.y.toFixed(4), z: +z.toFixed(4),
       present,
       vx: +fv.x.toFixed(3), vy: +fv.y.toFixed(3), vz: +vz.toFixed(3),
-      count: countVal, flags,
+      count: present ? countVal : 0, flags,
     });
   }
   return out;
@@ -2395,7 +2567,23 @@ setInterval(() => {
     if (flow.joined) emitRoom();
     return;
   }
-  if (fuelAddr && fuelNow - lastFuelVerify > 2000) {
+  if (liveFuelAddr && fuelNow - liveFuelLastVerify > 2000) {
+    liveFuelLastVerify = fuelNow;
+    if (verifyLiveFuel()) {
+      liveFuelVerified = true;
+      liveFuelVerifyFails = 0;
+    } else {
+      liveFuelVerifyFails++;
+      if (liveFuelVerifyFails >= 2) {
+        log('live fuel base moved; relocating');
+        liveFuelAddr = 0;
+        liveFuelSource = null;
+        liveFuelVerified = false;
+        liveFuelVerifyFails = 0;
+      }
+    }
+  }
+  if (!liveFuelAddr && fuelAddr && fuelNow - lastFuelVerify > 2000) {
     lastFuelVerify = fuelNow;
     if (verifyFuelBase()) {
       fuelVerified = true;
@@ -2476,8 +2664,9 @@ setInterval(() => {
     hopper_fuel: me ? me.hopper_fuel : null,
     hopper_capacity: (() => { const our = roomSeats.find(s => s.name === OPT.username); return (our && readRobotCapacity(our.robot_id, our.robot_class)) ?? OPT.hopperCapacity; })(),
     intake_active: me ? me.intake_active : null,
-    fuel_ok: fuelVerified && fuelPacketCount > 0 && fuel.length === fuelPacketCount,
-    fuel_source: fuelSource,
+    fuel_ok: fuelPacketCount > 0 && fuel.length === fuelPacketCount
+      && (liveFuelAddr ? liveFuelVerified : fuelVerified),
+    fuel_source: liveFuelAddr ? liveFuelSource : (fuelAddr ? 'table' : null),
     me, robots, fuel, fuel_count: fuelPacketCount,
   };
   if (OPT.binary) { state.fuel_bin = true; state.fuel = []; }
