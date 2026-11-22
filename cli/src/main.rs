@@ -33,7 +33,7 @@ struct Args {
     fuel: Option<String>,
     hopper_capacity: Option<u16>,
     robot: Option<u16>,
-    spectator: bool,
+    slot: Option<String>,
     server: Option<String>,
     binary: bool,
     field_frame: bool,
@@ -66,7 +66,7 @@ impl Default for Args {
             fuel: None,
             hopper_capacity: None,
             robot: None,
-            spectator: false,
+            slot: None,
             server: None,
             binary: true,
             field_frame: false,
@@ -107,7 +107,8 @@ OPTIONS:
   --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150; % optional)
   --hopper-capacity <N>  optional hopper capacity for the selected robot (0..65535)
   --robot <ID>        select this robot/team id in the room before ready
-  --spectator         move to a spectator slot (host: SIDELINE; joiner: WATCHING); never ready or start
+  --slot <SLOT>       take a slot: redC/red0, red1, red2, redHP, blueC/blue0,
+                      blue1, blue2, blueHP, referee, or spectator
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -167,7 +168,22 @@ fn parse_args() -> Result<Args, String> {
                         .map_err(|_| "--hopper-capacity must be 0..65535")?,
                 );
             }
-            "--spectator" => a.spectator = true,
+            "--slot" => {
+                let value = it.next().ok_or("--slot needs a value")?;
+                let lower = value.to_ascii_lowercase();
+                if !matches!(lower.as_str(),
+                    "redc" | "red0" | "red1" | "red2" | "redhp"
+                    | "bluec" | "blue0" | "blue1" | "blue2" | "bluehp"
+                    | "referee" | "spectator") {
+                    return Err("--slot must be redC/red0, red1, red2, redHP, \
+                        blueC/blue0, blue1, blue2, blueHP, referee, or spectator"
+                        .into());
+                }
+                a.slot = Some(lower);
+            }
+            "--spectator" => {
+                return Err("--spectator was replaced by --slot spectator".into());
+            }
             "--robot" => {
                 let value = it.next().ok_or("--robot needs a value")?;
                 a.robot = Some(
@@ -397,7 +413,7 @@ fn main() {
     opts.fuel = args.fuel.clone();
     opts.hopper_capacity = args.hopper_capacity;
     opts.robot = args.robot;
-    opts.spectator = args.spectator;
+    opts.slot = args.slot.clone();
     opts.server = args.server.clone();
     opts.binary = args.binary;
     opts.field_frame = args.field_frame;
@@ -505,8 +521,9 @@ fn main() {
                     last_state = Instant::now();
                 }
                 if !seated {
-                    if args.spectator {
-                        eprintln!("spectating (no driver seat)");
+                    if args.slot.is_some() {
+                        eprintln!("slot {} active without a driver seat; continuing",
+                            args.slot.as_deref().unwrap_or("spectator"));
                         spectator_pending = None;
                     } else {
                         eprintln!("room reports no driver seat; waiting for engine outcome");

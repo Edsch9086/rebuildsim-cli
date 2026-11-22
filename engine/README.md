@@ -48,8 +48,8 @@ Flags:
 --fuel <PCT>        test-only host fuel rule (25, 50, 75, 100, 125, 150)
 --hopper-capacity <N>  override the robot's hopper capacity (0..65535)
 --robot <ID>        select this robot/team id after joining
---spectator         move to a spectator slot; never ready/start (host -> SIDELINE
-                    referee, non-host -> WATCHING)
+--slot <SLOT>       redC/red0, red1, red2, redHP, blueC/blue0, blue1,
+                    blue2, blueHP, referee, or spectator
 --binary            framed stdout: JSON + packed fuel records
 --field-frame       raw global coordinates (default: alliance-normalized)
 --frame-alliance red|blue  diagnostic override for the output frame (r/b accepted)
@@ -191,11 +191,14 @@ Playwright.
 - `heading` is the **chassis** yaw (name+0x23); `turret_heading` is the turret
   yaw (name+0x3f). Turning uses the `rotate` input axis and updates `heading`;
   the game auto-aims the turret.
-- `--spectator` moves the player to a spectator slot by selecting its own card
-  and clicking the target. A host/creator takes the `SIDELINE`/referee slot; a
-  non-host takes a `WATCHING` slot (the room records `action: "bench"`,
-  `by: "self"`). A non-host cannot take the referee slot or move back to a
-  driver seat. It never readies or starts and reports `me: null`.
+- `--slot` selects a room target after joining by selecting the player card and
+  clicking the target. Player seats (`redC`/`red0` ... `blueHP`) suppress READY
+  until the move resolves. `referee` is the host-only `SIDELINE` slot;
+  `spectator` is `WATCHING` (allowed for hosts and joiners). An occupied slot or
+  a denied move is logged, and the bot keeps running: player-slot requests then
+  ready in their current seat, while `referee`/`spectator` stay unready. The
+  room compacts seats, so a request for a higher row can resolve to a lower row
+  and is logged as such. No `--slot` joins normally.
 - `hub.active` is our hub (already alliance-normalized); `hub.red_active` /
   `hub.blue_active` are diagnostics. A tied AUTO is reported as `null` during
   shifts because the FMS picks the order; use `--hub-order red|blue` to force it

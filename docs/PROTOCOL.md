@@ -417,13 +417,17 @@ for the headless engine.
   - `START MATCH` (1028..1268); center `(1150, 688)`
 - Start-with-unready dialog: `START ANYWAY` at `(640, 372)` in 800px layout;
   check the current screenshot before clicking.
-- Player cards: red captain `(100, 272)` / red 1 `(100, 332)` / red 2
-  `(100, 392)` / red 3 `(100, 452)`; blue uses x≈430. Click your own card to
+- Player cards: red `redC`/`red0` `(100, 272)`, `red1` `(100, 332)`, `red2`
+  `(100, 392)`, `redHP` `(100, 452)`; blue uses x≈535. Click your own card to
   select it; the room then reveals `WATCHING <n>` below `SIDELINE`.
-- Spectator moves (after selecting your card): `WATCHING` target `(215, 610)`
-  for a non-host; `SIDELINE`/referee `(190, 530)` is host-only. The non-host
-  move is sent as `0x09` (observed `09 01 00 00 ff`) and the server records it
-  as `room_action` `action: "bench"`, `by: "self"`.
+- Slot moves (after selecting your card): player seats use the card target;
+  `WATCHING`/`spectator` is `(215, 610)`; `SIDELINE`/`referee` is `(190, 530)`
+  and is host-only. Seat moves are `0x09` `seat_move`; the watching move is
+  `action: "bench"`. The server records the actor as `by: "self"` or
+  `by: "host"`.
+- Room seats compact toward the front of each team. A request for a higher empty
+  row (for example `red2` with fewer than two red teammates ahead) can resolve
+  to a lower row; the engine logs that as unavailable/compacted and continues.
 
 ### Text API exports
 

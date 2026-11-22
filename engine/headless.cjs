@@ -264,7 +264,7 @@ const OPT = {
   fuel: getArg('fuel', ''),
   hopperCapacity: getArg('hopper-capacity', ''),
   robot: getArg('robot', ''),
-  spectator: process.argv.includes('--spectator'),
+  slot: getArg('slot', ''),
   binary: process.argv.includes('--binary'),
   fieldFrame: process.argv.includes('--field-frame'),
   frameAlliance: getArg('frame-alliance', ''),
@@ -286,7 +286,7 @@ function optionError(error, msg) {
   setTimeout(() => process.exit(2), 100);
 }
 const valueFlags = ['--code', '--username', '--spawn', '--server', '--fuel',
-  '--hopper-capacity', '--robot', '--frame-alliance', '--hub-order',
+  '--hopper-capacity', '--robot', '--slot', '--frame-alliance', '--hub-order',
   '--expect-build', '--emit-hz', '--asset-dir'];
 for (const flag of valueFlags) {
   const i = process.argv.indexOf(flag);
@@ -294,6 +294,36 @@ for (const flag of valueFlags) {
     optionError('missing_value', `${flag} needs a value`);
   }
 }
+if (process.argv.includes('--spectator')) {
+  optionError('unknown_option', '--spectator was replaced by --slot spectator');
+}
+const SLOT_TARGETS = {
+  redc: { name: 'redC', kind: 'seat', team: 0, row: 0 },
+  red0: { name: 'redC', kind: 'seat', team: 0, row: 0 },
+  red1: { name: 'red1', kind: 'seat', team: 0, row: 1 },
+  red2: { name: 'red2', kind: 'seat', team: 0, row: 2 },
+  redhp: { name: 'redHP', kind: 'seat', team: 0, row: 3 },
+  bluec: { name: 'blueC', kind: 'seat', team: 1, row: 0 },
+  blue0: { name: 'blueC', kind: 'seat', team: 1, row: 0 },
+  blue1: { name: 'blue1', kind: 'seat', team: 1, row: 1 },
+  blue2: { name: 'blue2', kind: 'seat', team: 1, row: 2 },
+  bluehp: { name: 'blueHP', kind: 'seat', team: 1, row: 3 },
+  referee: { name: 'referee', kind: 'referee' },
+  spectator: { name: 'spectator', kind: 'spectator' },
+};
+if (OPT.slot) {
+  const target = SLOT_TARGETS[String(OPT.slot).trim().toLowerCase()];
+  if (!target) {
+    optionError('invalid_slot',
+      'invalid --slot: use redC/red0, red1, red2, redHP, blueC/blue0, blue1, blue2, blueHP, referee, or spectator');
+  }
+  OPT.slot = target.name;
+  OPT.slotTarget = target;
+} else {
+  OPT.slot = null;
+  OPT.slotTarget = null;
+}
+const NO_PLAY_SLOT = OPT.slot === 'referee' || OPT.slot === 'spectator';
 if (OPT.code && !/^[A-Z0-9]{5}$/.test(OPT.code)) {
   optionError('invalid_code', 'invalid --code: use a 5-character room code');
 }
@@ -441,10 +471,14 @@ function failIdentity(reason, detail) {
   setTimeout(() => process.exit(8), 100);
 }
 let joinFatal = false, spectatorFatal = false, spectatorExitTimer = null;
-let spectatorMoved = false, spectatorMoveTries = 0, spectatorMoveTimer = null;
-let spectatorMovePending = false, spectatorMoveFailed = false, lastSpectatorMoveAt = 0;
+let slotMoveDone = false, slotMovePending = false, slotMoveTries = 0;
+let slotMoveTimer = null, lastSlotMoveAt = 0, slotMoveOutcome = null;
+function slotPending() {
+  return !!OPT.slot && !slotMoveDone;
+}
 function failSpectator(detail) {
-  if (OPT.spectator) {
+  if (OPT.slot) {
+    log(`slot ${OPT.slot} unavailable`, detail || 'no driver seat');
     confirmSpectator([]);
     return;
   }
@@ -546,7 +580,7 @@ function resetMatchState(clearRoster = false) {
 }
 
 function noteSeatPresence(ours) {
-  if (OPT.spectator) return;
+  if (NO_PLAY_SLOT) return;
   if (ours) {
     seatMissingSince = 0;
     lastOurSeatAt = Date.now();
@@ -595,7 +629,7 @@ function clearRoomIdentity() {
 function applyRoom06(buf, cached = false) {
   const parsed = parseRoom06(buf);
   if (!parsed.seats.length) {
-    if (OPT.spectator && flow.joined && !spectatorMoved
+    if (NO_PLAY_SLOT && flow.joined && slotPending()
         && buf.includes(Buffer.from(OPT.username))) {
       confirmSpectator([]);
       return true;
@@ -630,7 +664,7 @@ function applyRoom06(buf, cached = false) {
     const oursNow = parsed.seats.some(s => s.name === OPT.username);
     const oursBefore = roomSeats.some(s => s.name === OPT.username);
     if (oursBefore && !oursNow) {
-      if (OPT.spectator) {
+      if (NO_PLAY_SLOT) {
         confirmSpectator(parsed.seats);
         return true;
       }
@@ -639,7 +673,7 @@ function applyRoom06(buf, cached = false) {
       log('room packet omits our seat; keeping last good seat list');
       cancelReadyClick();
       lastReadyClickAt = 0;
-      if (!resultsPending && !OPT.spectator) noteSeatPresence(false);
+      if (!resultsPending && !NO_PLAY_SLOT) noteSeatPresence(false);
       return false;
     }
     if (matchStarted && clockStarted) {
@@ -741,7 +775,7 @@ function applyRoom06(buf, cached = false) {
       return false;
     }
     if (!ours) {
-      if (!resultsPending && !OPT.spectator) noteSeatPresence(false);
+      if (!resultsPending && !NO_PLAY_SLOT) noteSeatPresence(false);
       return false;
     }
     if (!seated || role !== 'driver') {
@@ -751,7 +785,7 @@ function applyRoom06(buf, cached = false) {
     }
     const ourSeat = roomSeats.find(s => s.name === OPT.username);
     if (ourSeat && ourSeat.ready === true) readyClicked = true;
-    if (!resultsPending && !OPT.spectator) {
+    if (!resultsPending && !NO_PLAY_SLOT && !slotPending()) {
       readyIfNeeded();
       const ourSeatNow = roomSeats.find(s => s.name === OPT.username);
       if (!cached && host && OPT.start && !startClicked && !matchStarted && !uiBusy
@@ -762,20 +796,23 @@ function applyRoom06(buf, cached = false) {
       }
     }
   }
-  if (OPT.spectator && roomSeats.some(s => s.name === OPT.username)) {
-    // A stale packet still seats us; retry the sideline move.
-    spectatorMoved = false;
-    if (spectatorMoveFailed) { spectatorMoveFailed = false; spectatorMoveTries = 0; }
+  if (NO_PLAY_SLOT && flow.joined && roomSeats.some(s => s.name === OPT.username)) {
+    // A stale packet still seats us; retry only if the move had succeeded.
+    if (slotMoveDone && (slotMoveOutcome === 'spectator' || slotMoveOutcome === 'referee')) {
+      slotMoveDone = false;
+      slotMoveOutcome = null;
+    }
   }
   maybeSelectRobot();
-  maybeMoveToSpectator();
+  maybeMoveToSlot();
   return true;
 }
 
 function confirmSpectator(seats = []) {
-  spectatorMoved = true;
-  spectatorMovePending = false;
-  spectatorMoveFailed = false;
+  slotMoveDone = true;
+  slotMovePending = false;
+  slotMoveOutcome = OPT.slotTarget && OPT.slotTarget.kind === 'referee'
+    ? 'referee' : 'spectator';
   seated = false;
   role = 'spectator';
   roomSeats = seats;
@@ -785,44 +822,154 @@ function confirmSpectator(seats = []) {
   log('spectating');
 }
 
-function maybeMoveToSpectator() {
-  if (!OPT.spectator || spectatorMoved || spectatorMovePending || !flow.joined || !seated) return;
-  if (spectatorMoveFailed || spectatorMoveTries >= 4) return;
-  if (Date.now() - lastSpectatorMoveAt < 3000) return;
-  const seat = roomSeats.find(s => s.name === OPT.username);
-  if (!seat) return;
-  const teamSeats = roomSeats.filter(s => s.team_flag === seat.team_flag)
+function slotSeatRow(name, team) {
+  const teamSeats = roomSeats.filter(s => s.team_flag === team)
     .sort((a, b) => a.seat - b.seat);
-  const row = Math.max(0, teamSeats.findIndex(s => s.name === OPT.username));
-  const x = seat.team_flag === 1 ? 430 : 100;
-  const y = 263 + row * 64;
-  // Select our own player card first; the room then reveals the move targets.
-  // The host may take the referee SIDELINE slot. A non-host may only move to
-  // the WATCHING area (below SIDELINE at 1280x720); it must never take the
-  // referee slot.
-  const target = host ? { x: 190, y: 530, name: 'referee' }
-    : { x: 215, y: 610, name: 'watching' };
-  spectatorMoveTries++;
-  lastSpectatorMoveAt = Date.now();
-  spectatorMovePending = true;
+  return teamSeats.findIndex(s => s.name === name);
+}
+
+function slotSeatName(team, row) {
+  const side = team === 1 ? 'blue' : 'red';
+  if (row === 0) return side + 'C';
+  if (row === 3) return side + 'HP';
+  return side + row;
+}
+
+function startSlotMove(target, done) {
+  const seat = roomSeats.find(s => s.name === OPT.username);
+  if (!seat) { done(); return; }
+  const row = Math.max(0, slotSeatRow(OPT.username, seat.team_flag));
+  const sx = seat.team_flag === 1 ? 535 : 100;
+  const sy = 263 + row * 64;
+  const tx = target.team == null ? target.x : (target.team === 1 ? 535 : 100);
+  const ty = target.row == null ? target.y : 263 + target.row * 64;
+  slotMoveTries++;
+  lastSlotMoveAt = Date.now();
+  slotMovePending = true;
   cancelReadyClick();
-  log(`moving to ${target.name} slot`, 'seat', seat.seat, 'source', x, y,
-    'target', target.x, target.y, 'attempt', spectatorMoveTries);
-  globalThis.__ctl.click(x, y);
-  spectatorMoveTimer = uiLater(() => {
-    globalThis.__ctl.click(target.x, target.y);
-    spectatorMoveTimer = uiLater(() => {
-      spectatorMoveTimer = null;
-      spectatorMovePending = false;
-      if (!spectatorMoved && spectatorMoveTries >= 4) {
-        spectatorMoveFailed = true;
-        const detail = host ? 'seat move was not confirmed'
-          : 'watching move was not confirmed';
-        log(`spectator ${target.name} move failed`, detail);
-        emit({ type: 'error', error: 'spectator_move_failed', detail });
-      }
+  log(`moving to slot ${OPT.slot}`, 'source', sx, sy, 'target', tx, ty,
+    'attempt', slotMoveTries);
+  globalThis.__ctl.click(sx, sy);
+  slotMoveTimer = uiLater(() => {
+    globalThis.__ctl.click(tx, ty);
+    slotMoveTimer = uiLater(() => {
+      slotMoveTimer = null;
+      slotMovePending = false;
+      done();
     }, 1800);
   }, 500);
+}
+
+function retrySlotMove() {
+  if (slotMoveDone) return;
+  uiLater(() => {
+    lastSlotMoveAt = 0;
+    maybeMoveToSlot();
+  }, 800);
+}
+
+function maybeMoveToSlot() {
+  if (!OPT.slot || !OPT.slotTarget || slotMoveDone || slotMovePending) return;
+  if (!flow.joined) return;
+  if (robotSelecting || uiBusy) return;
+  if (Date.now() - lastSlotMoveAt < 1000) return;
+  const target = OPT.slotTarget;
+  const seat = roomSeats.find(s => s.name === OPT.username);
+
+  if (!seated || !seat) {
+    if (NO_PLAY_SLOT) {
+      if (!slotMoveDone) {
+        log(`slot ${OPT.slot} active`, 'joined without a driver seat');
+        slotMoveDone = true;
+        slotMoveOutcome = target.kind;
+      }
+    } else {
+      log(`slot ${OPT.slot} unavailable`, 'no driver seat');
+      slotMoveDone = true;
+      slotMoveOutcome = 'denied';
+    }
+    return;
+  }
+
+  if (target.kind === 'seat') {
+    const row = slotSeatRow(OPT.username, seat.team_flag);
+    if (seat.team_flag === target.team && row === target.row) {
+      log(`slot ${OPT.slot} already selected`);
+      slotMoveDone = true;
+      slotMoveOutcome = 'seat';
+      readyIfNeeded();
+      return;
+    }
+    const teamSeats = roomSeats.filter(s => s.team_flag === target.team)
+      .sort((a, b) => a.seat - b.seat);
+    const occupant = teamSeats[target.row];
+    if (occupant && occupant.name !== OPT.username) {
+      log(`slot ${OPT.slot} occupied by ${occupant.name}`);
+      slotMoveDone = true;
+      slotMoveOutcome = 'occupied';
+      readyIfNeeded();
+      return;
+    }
+    startSlotMove({ team: target.team, row: target.row }, () => {
+      const after = roomSeats.find(s => s.name === OPT.username);
+      if (!after) {
+        log(`slot ${OPT.slot} unavailable`, 'no driver seat after move');
+        confirmSpectator([]);
+        return;
+      }
+      const afterRow = slotSeatRow(OPT.username, after.team_flag);
+      if (after.team_flag === target.team && afterRow === target.row) {
+        log(`slot ${OPT.slot} selected`);
+        slotMoveDone = true;
+        slotMoveOutcome = 'seat';
+        readyIfNeeded();
+        return;
+      }
+      if (after.team_flag === target.team && afterRow >= 0 && afterRow < target.row) {
+        log(`slot ${OPT.slot} unavailable`,
+          `room placed this player at ${slotSeatName(after.team_flag, afterRow)} (slots compact)`);
+        slotMoveDone = true;
+        slotMoveOutcome = 'compacted';
+        readyIfNeeded();
+        return;
+      }
+      if (slotMoveTries >= 2) {
+        log(`slot ${OPT.slot} unavailable`,
+          !host ? 'no permission (non-host cannot self-move to that seat)'
+            : 'move rejected');
+        slotMoveDone = true;
+        slotMoveOutcome = 'denied';
+        readyIfNeeded();
+        return;
+      }
+      retrySlotMove();
+    });
+    return;
+  }
+
+  if (target.kind === 'referee' && !host) {
+    log('slot referee denied', 'the referee SIDELINE slot is host-only');
+    slotMoveDone = true;
+    slotMoveOutcome = 'denied';
+    return;
+  }
+
+  const coords = target.kind === 'referee'
+    ? { x: 190, y: 530 } : { x: 215, y: 610 };
+  startSlotMove(coords, () => {
+    if (role === 'spectator' || !seated) {
+      slotMoveDone = true;
+      slotMoveOutcome = target.kind;
+      return;
+    }
+    if (slotMoveTries >= 3) {
+      log(`slot ${OPT.slot} unavailable`, 'move rejected (occupied or no permission)');
+      slotMoveDone = true;
+      slotMoveOutcome = 'denied';
+      return;
+    }
+    retrySlotMove();
+  });
 }
 
 function parse41(buf) {
@@ -2149,7 +2296,8 @@ function cancelReadyClick() {
 }
 
 function readyIfNeeded(force = false) {
-  if (OPT.spectator || matchStarted || uiBusy || resultsPending || readyClickPending || robotSelecting) return;
+  if (NO_PLAY_SLOT || slotPending() || matchStarted || uiBusy || resultsPending
+      || readyClickPending || robotSelecting) return;
   const seat = roomSeats.find(s => s.name === OPT.username);
   if (!seat || seat.ready !== false) return;
   if (OPT.robot != null && seat.robot_id !== OPT.robot && robotSelectFails < 3) return;
@@ -2179,7 +2327,8 @@ function returnToRoom() {
 }
 
 function clickStartWhenReady(attempt = 0, force = false) {
-  if (OPT.spectator || !host || resultsPending || flow.match || matchStarted || robotSelecting) {
+  if (NO_PLAY_SLOT || slotPending() || !host || resultsPending || flow.match
+      || matchStarted || robotSelecting) {
     startClicked = false;
     return;
   }
@@ -2226,7 +2375,8 @@ function clickStartWhenReady(attempt = 0, force = false) {
 }
 
 function robotSelectionPending() {
-  if (OPT.spectator || OPT.robot == null || matchStarted || flow.match || !flow.joined || !seated) return false;
+  if (NO_PLAY_SLOT || OPT.robot == null || matchStarted || flow.match
+      || !flow.joined || !seated) return false;
   const seat = roomSeats.find(s => s.name === OPT.username);
   return !!seat && seat.robot_id !== OPT.robot;
 }
@@ -2282,6 +2432,7 @@ function maybeSelectRobot() {
           detail: `wanted ${OPT.robot}, room reports ${cur && cur.robot_id}` });
       }
     }
+    maybeMoveToSlot();
     uiLater(() => readyIfNeeded(), 800);
   }, 2500);
 }
@@ -2482,7 +2633,12 @@ function onTrack(name, params) {
         uiLater(() => globalThis.__ctl.click(dir < 0 ? 686 : 931, 632), 1500 + i * 250);
       }
       uiLater(() => globalThis.__ctl.click(454, 688), 1500 + clicks * 250 + 500); // done
-      uiLater(() => { uiBusy = false; readyIfNeeded(); readyAndStart(); }, 1500 + clicks * 250 + 1000);
+      uiLater(() => {
+        uiBusy = false;
+        maybeMoveToSlot();
+        readyIfNeeded();
+        readyAndStart();
+      }, 1500 + clicks * 250 + 1000);
       log('setting fuel rule', OPT.fuel, 'clicks', clicks, dir < 0 ? 'left' : 'right');
     } else {
       readyAndStart();

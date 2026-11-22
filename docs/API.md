@@ -340,17 +340,32 @@ uses its default variant for an id: `--robot 2910` selects 2910 V2 (capacity 50)
 The join UI itself is retried up to 12 times for the name/room-code entry, so a
 slow first paint does not strand the bot.
 
-## Spectator / SIDELINE
+## Slot selection
 
-`--spectator` joins, never readies or starts, and moves itself to a spectator
-slot. A host/creator selects its own card and takes the `SIDELINE`/referee slot;
-a non-host selects its own card and takes a `WATCHING` slot, and can never take
-the referee slot or return itself to a driver seat. The room records the
-non-host move as `room_action` `action: "bench"`, `by: "self"` (a host move is
-`by: "host"`). Once moved, the engine reports `role: "spectator"`,
-`seated: false`, `me: null`, and continues to emit robots/fuel state. The host
-may need to confirm `START ANYWAY` because the referee/spectator does not ready.
-The engine keeps running in spectator mode instead of exiting `7`.
+`--slot <slot>` takes a room target after joining. Accepted values are
+`redC`/`red0`, `red1`, `red2`, `redHP`, `blueC`/`blue0`, `blue1`, `blue2`,
+`blueHP`, `referee`, and `spectator`. The engine selects its own player card and
+clicks the target; READY is suppressed until the move resolves, so the slot
+request happens before auto-ready.
+
+- **Player seat**: an occupied target is logged as
+  `slot red1 occupied by Name`. A rejected move is logged as
+  `slot <slot> unavailable ...`; a non-host player-seat move reports no
+  permission. In both cases the bot keeps its current seat and then readies
+  normally.
+- **`referee`**: the host-only `SIDELINE` slot. A non-host logs
+  `slot referee denied` and stays unready; an unavailable referee slot is logged
+  and also stays unready.
+- **`spectator`**: the `WATCHING` area, allowed for hosts and joiners. It never
+  readies or starts and reports `role: "spectator"`, `seated: false`,
+  `me: null`.
+- Room seats compact. Moving from a lower seat to a higher empty row can resolve
+  to a lower row; that is logged as `slot <slot> unavailable ... (slots compact)`
+  and is not fatal.
+- A requested slot that cannot be taken never exits `7`; the bot continues in
+  its current seat/role. The host may need `START ANYWAY` when a
+  referee/spectator does not ready.
+- Without `--slot`, the bot joins normally and auto-readies.
 
 ## Timeouts and disconnect handling
 
@@ -401,7 +416,8 @@ CLI exit codes: `0` normal, `1` engine/boot error, `2` bad arguments/config,
 `3` build/asset pin failure, `4` protocol mismatch, `5` state/join/heartbeat
 timeout, stalled clock, or blocked host start, `6` authoritative room WebSocket close, left
 room, or stuck results screen, `7` joined as spectator, `8` identity
-failure (duplicate names).
+failure (duplicate names). A requested `--slot` that cannot be taken does not
+exit `7`; without `--slot`, a join that lands in a spectator seat still does.
 
 For **lobby** disconnects, `--restart-on-exit` respawns the engine and rejoins
 the same room code after 2 seconds, up to `--max-restarts N` (default 3). It is

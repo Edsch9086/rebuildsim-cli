@@ -62,7 +62,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Local server (`--server`) | ✅ connects to a local WS listener |
 | Fuel rule (`--fuel`) | test-only host UI flow; 25% → 150 fuel validated |
 | Robot selection | ✅ `--robot <id>` after join (0x07 replay; game default variant, e.g. 2910 V2) |
-| Spectator mode | ✅ `--spectator`; host self-moves to SIDELINE, a non-host self-moves to WATCHING; never ready/start |
+| Slot selection | ✅ `--slot <slot>`: redC/red0..redHP, blueC/blue0..blueHP, referee, spectator; occupied/denied slots are logged, not fatal |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
@@ -97,8 +97,11 @@ cargo run --release -p rebuildsim-cli -- --create --start --username TestBot --d
 # select a robot after joining (the game's default variant for that id)
 cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --robot 4414
 
-# spectate (host: SIDELINE referee; joiner: WATCHING; never readies or starts)
-cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username WatchBot --spectator
+# take a specific seat/role (occupied/denied slots are logged, not fatal)
+cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --slot blue1
+
+# spectate from WATCHING (hosts may use --slot referee for SIDELINE)
+cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username WatchBot --slot spectator
 ```
 
 ## Nix

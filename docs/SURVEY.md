@@ -332,11 +332,17 @@ The headless engine drives the game with synthetic DOM events:
   ready" → `START ANYWAY`.
 - Joining a room whose match is already running puts you in as a **spectator**;
   join before start to drive.
-- To spectate from a driver seat, select your own player card, then click the
-  `WATCHING` target `(215, 610)` at 1280×720. The server records this non-host
-  self-move as `room_action` `action: "bench"`, `by: "self"` (outgoing `0x09`).
-  The referee `SIDELINE` slot `(190, 530)` is host-only; a non-host cannot take
-  it or move itself back to a driver seat.
+- `--slot` selects a room target by clicking your own card and then the target:
+  player seats (`redC`/`red0` … `blueHP`) use the card targets, `spectator` uses
+  `WATCHING` `(215, 610)`, and `referee` uses `SIDELINE` `(190, 530)`.
+  `SIDELINE` is host-only; the watching move is recorded as
+  `room_action` `action: "bench"`, `by: "self"` (outgoing `0x09`). READY is
+  suppressed until the slot request resolves.
+- Room seats compact. A non-host self-move to a player seat is rejected (logged
+  as no permission); moving to a higher empty row can settle at a lower row.
+  Occupied and compacted targets are logged and are not fatal.
+- A `referee` request by a non-host is denied and the bot stays unready;
+  `spectator` is available to hosts and joiners and stays unready.
 - A spectator that joins a **running** match misses the pre-auto countdown, so
   the engine accepts the live positive clock once the match has been active for
   a second. The running clock is available immediately; the client may not
