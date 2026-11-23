@@ -119,8 +119,23 @@ Use `--keyboard` (CLI) or omit `--gamepad` (engine) for digital WASD/JL +
 LShift/K/Space controls.
 
 Other commands: `{"type":"ready"}`, `{"type":"start"}`, `{"type":"leave"}`,
-`{"type":"quit"}`, `{"type":"ping"}`, `{"type":"dump06","path":"/tmp/r.bin"}`,
-`{"type":"dumpmem","path":"/tmp/mem.bin"}`.
+`{"type":"quit"}`, `{"type":"ping"}`, `{"type":"chat","text":"hello"}`,
+`{"type":"dump06","path":"/tmp/r.bin"}`, `{"type":"dumpmem","path":"/tmp/mem.bin"}`.
+
+### Chat
+
+- Read: the engine emits
+  `{"type":"chat","name":"Player","text":"hello","system":false,"kind":0}`.
+  System/room messages have `name:""` and `system:true` (join notices use
+  `kind:3`).
+- Write: send `{"type":"chat","text":"..."}` on stdin. Messages are queued until
+  the room socket is joined, then sent as `0x14` + a 96-byte UTF-8 field.
+  Empty messages are ignored; text is truncated safely at 96 bytes.
+- Only messages the server sends after joining are emitted; the engine does not
+  fetch chat history.
+- The Rust `Engine` exposes `send_chat()` and `EngineEvent::Chat`, and the CLI
+  prints `chat Name: text` / `chat [room] text`. `--chat <TEXT>` sends one or
+  more messages after joining.
 
 The engine emits a `heartbeat` about once per second and `ws` events for socket
 open/close/error. The close event includes `room: true` when it was the socket

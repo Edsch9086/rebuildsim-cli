@@ -361,6 +361,16 @@ pub enum EngineEvent {
     },
     #[serde(rename = "protocol")]
     Protocol { version: Option<u8> },
+    #[serde(rename = "chat")]
+    Chat {
+        #[serde(default)]
+        name: String,
+        text: String,
+        #[serde(default)]
+        system: bool,
+        #[serde(default)]
+        kind: u8,
+    },
     #[serde(rename = "score")]
     Score {
         #[serde(default)]
@@ -807,6 +817,12 @@ impl Engine {
         stdin.flush()
     }
 
+    /// Send a room/match chat message. The engine adds the 0x14 framing and
+    /// truncates the text to the client's 96-byte field.
+    pub fn send_chat(&mut self, text: &str) -> std::io::Result<()> {
+        self.send(&serde_json::json!({"type": "chat", "text": text}))
+    }
+
     pub fn send_input(&mut self, input: &Input) -> std::io::Result<()> {
         let value = serde_json::json!({
             "type": "input",
@@ -1097,6 +1113,34 @@ mod tests {
                 assert_eq!(extra.get("server").and_then(|v| v.as_str()), Some("b"));
             }
             other => panic!("expected error, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn chat_event_parses_system_and_player_messages() {
+        let player: EngineEvent = serde_json::from_str(
+            r#"{"type":"chat","name":"ChatProbe","text":"hello","system":false,"kind":0}"#,
+        )
+        .expect("player chat");
+        match player {
+            EngineEvent::Chat { name, text, system, kind } => {
+                assert_eq!(name, "ChatProbe");
+                assert_eq!(text, "hello");
+                assert!(!system);
+                assert_eq!(kind, 0);
+            }
+            other => panic!("expected chat, got {other:?}"),
+        }
+        let system: EngineEvent = serde_json::from_str(
+            r#"{"type":"chat","name":"","text":"Bot arrived","system":true,"kind":3}"#,
+        )
+        .expect("system chat");
+        match system {
+            EngineEvent::Chat { system, kind, .. } => {
+                assert!(system);
+                assert_eq!(kind, 3);
+            }
+            other => panic!("expected chat, got {other:?}"),
         }
     }
 

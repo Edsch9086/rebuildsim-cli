@@ -63,6 +63,7 @@ different live build unless `RB_ALLOW_BUILD_UPDATE=1`, and it never updates
 | Fuel rule (`--fuel`) | test-only host UI flow; 25% → 150 fuel validated |
 | Robot selection | ✅ `--robot <id>` after join (0x07 replay; game default variant, e.g. 2910 V2) |
 | Slot selection | ✅ `--slot <slot>`: redC/red0..redHP, blueC/blue0..blueHP, referee, spectator; occupied/denied slots are logged, not fatal |
+| Chat | ✅ read/write `0x14`; `EngineEvent::Chat`, `Engine::send_chat`, and repeatable `--chat <TEXT>` |
 | Rust CLI | ✅ library + demo binary |
 
 ## Quick start (local prototype)
@@ -102,6 +103,9 @@ cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --slot 
 
 # spectate from WATCHING (hosts may use --slot referee for SIDELINE)
 cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username WatchBot --slot spectator
+
+# send chat after joining (repeat the flag for more messages)
+cargo run --release -p rebuildsim-cli -- --code <LOBBY> --username MyBot --chat "hello"
 ```
 
 ## Nix

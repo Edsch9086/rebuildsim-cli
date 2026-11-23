@@ -13,6 +13,7 @@ use rebuildsim_cli::engine::{
     Engine, EngineEvent, EngineOptions, GameState, Input, default_engine_path, find_me,
     validate_server,
 };
+use std::collections::VecDeque;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,7 @@ struct Args {
     hopper_capacity: Option<u16>,
     robot: Option<u16>,
     slot: Option<String>,
+    chat: Vec<String>,
     server: Option<String>,
     binary: bool,
     field_frame: bool,
@@ -67,6 +69,7 @@ impl Default for Args {
             hopper_capacity: None,
             robot: None,
             slot: None,
+            chat: Vec::new(),
             server: None,
             binary: true,
             field_frame: false,
@@ -109,6 +112,7 @@ OPTIONS:
   --robot <ID>        select this robot/team id in the room before ready
   --slot <SLOT>       take a slot: redC/red0, red1, red2, redHP, blueC/blue0,
                       blue1, blue2, blueHP, referee, or spectator
+  --chat <TEXT>       send a chat message after joining (repeatable)
   --server <HOST:PORT> connect to a local server build
   --json              use newline JSON (default is the binary fuel channel)
   --field-frame       report raw global coordinates instead of alliance-normalized
@@ -180,6 +184,13 @@ fn parse_args() -> Result<Args, String> {
                         .into());
                 }
                 a.slot = Some(lower);
+            }
+            "--chat" => {
+                let value = it.next().ok_or("--chat needs a value")?;
+                if value.trim().is_empty() {
+                    return Err("--chat must not be empty".into());
+                }
+                a.chat.push(value);
             }
             "--spectator" => {
                 return Err("--spectator was replaced by --slot spectator".into());
@@ -438,6 +449,8 @@ fn main() {
     let mut ready_seen = false;
     let mut joined = false;
     let mut join_started: Option<Instant> = None;
+    let mut chat_queue: VecDeque<String> = args.chat.iter().cloned().collect();
+    let mut chat_next_at: Option<Instant> = None;
     let mut last_state = Instant::now();
     let mut last_heartbeat = Instant::now();
     let mut match_seen = false;
@@ -445,6 +458,16 @@ fn main() {
     let mut spectator_pending: Option<Instant> = None;
 
     loop {
+        if joined && !chat_queue.is_empty()
+            && chat_next_at.map_or(true, |t| Instant::now() >= t) {
+            if let Some(text) = chat_queue.pop_front() {
+                match engine.send_chat(&text) {
+                    Ok(()) => eprintln!("chat sent: {text}"),
+                    Err(e) => eprintln!("chat send failed: {e}"),
+                }
+                chat_next_at = Some(Instant::now() + Duration::from_millis(300));
+            }
+        }
         if let Some(t) = spectator_pending {
             if t.elapsed() > Duration::from_secs(1) {
                 eprintln!("no driver seat after room update; exiting");
@@ -505,6 +528,9 @@ fn main() {
                 );
                 print_seats(&seats);
                 joined = true;
+                if !chat_queue.is_empty() && chat_next_at.is_none() {
+                    chat_next_at = Some(Instant::now());
+                }
                 if !seats.is_empty() {
                     join_started = None;
                 }
@@ -598,6 +624,16 @@ fn main() {
             }
             Ok(Some(EngineEvent::Protocol { version })) => {
                 println!("protocol version {version:?}");
+            }
+            Ok(Some(EngineEvent::Chat {
+                name, text, system, ..
+            })) => {
+                if system || name.is_empty() {
+                    println!("chat [room] {text}");
+                } else {
+                    println!("chat {name}: {text}");
+                }
+                last_heartbeat = Instant::now();
             }
             Ok(Some(EngineEvent::Score {
                 red,

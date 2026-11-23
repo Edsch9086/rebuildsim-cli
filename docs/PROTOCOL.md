@@ -243,6 +243,23 @@ S→C 43 <u32 tick> <u32>                            // 9 bytes
 `0x48` looks like per-player status/state hashes; `0x4b` like input/ack. They do
 not contain full robot poses.
 
+### 1.9 Chat (`0x14`)
+
+```
+C→S  14 <96-byte text>
+S→C  14 <24-byte name> <96-byte text> <9-byte tail>   // 130 bytes
+```
+
+- All fields are NUL-padded UTF-8. The client sends only the 96-byte text field;
+  the server adds the sender name and the 9-byte tail.
+- Observed player chat: name set, tail `00 …`. Observed join/system notice: empty
+  name, text like `ChatProbe arrived`, tail starts with `03`.
+- The server accepts chat on the authoritative room socket. The engine ignores
+  `0x14` from auxiliary sockets, truncates outgoing text to 96 bytes without
+  splitting UTF-8, and emits `name=""`/`system:true` when the name field is empty.
+- Only messages sent after the client joins are delivered; the client does not
+  request history.
+
 ## 2. Wasm memory map
 
 Addresses are examples from one run; heap layout shifts between runs. Use

@@ -343,6 +343,11 @@ The headless engine drives the game with synthetic DOM events:
   Occupied and compacted targets are logged and are not fatal.
 - A `referee` request by a non-host is denied and the bot stays unready;
   `spectator` is available to hosts and joiners and stays unready.
+- Room chat is `0x14`. The client sends `14` + a 96-byte NUL-padded UTF-8 field;
+  the server broadcasts `14` + a 24-byte sender name + the 96-byte text + a
+  9-byte tail (130 bytes). Join notices have an empty name, the text
+  `<name> arrived`, and tail marker `03`. The engine emits these as `chat`
+  events and accepts `{"type":"chat","text":"..."}` on stdin.
 - A spectator that joins a **running** match misses the pre-auto countdown, so
   the engine accepts the live positive clock once the match has been active for
   a second. The running clock is available immediately; the client may not

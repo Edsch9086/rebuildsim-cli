@@ -25,7 +25,8 @@ while let Some(state) = engine.next_state()? {
 }
 ```
 
-`Engine` also provides `next_event_timeout`, `next_state_timeout`, and
+`Engine` also provides `EngineEvent::Chat`, `send_chat()`, `next_event_timeout`,
+`next_state_timeout`, and
 `next_state_or_event_timeout` (returns `NextState::State` or
 `NextState::Event`). Use the timeout variants for bounded waits and the
 event-aware variant if you need to observe `Error`, `Ws`, or `Room` events.
@@ -285,6 +286,7 @@ Engine → CLI:
 {"type":"room","code":"ABCDE","host":true,"seated":true,"role":"driver",
  "match_active":false,"seats":[...]}
 {"type":"match","phase":"countdown","substage":"prematch","time":null,"seats":[...]}
+{"type":"chat","name":"MyBot","text":"hello","system":false,"kind":0}
 {"type":"score","seq":42,"red":7,"blue":4,"auto_red":3,"auto_blue":2}
 {"type":"state","seq":42,"t":1794772715.59,"phase":"auto","substage":"auto",
  "time":158.8,"time_remaining":158.8,"substage_remaining":15.8,
@@ -366,6 +368,26 @@ request happens before auto-ready.
   its current seat/role. The host may need `START ANYWAY` when a
   referee/spectator does not ready.
 - Without `--slot`, the bot joins normally and auto-readies.
+
+## Chat
+
+Chat is read and written over the authoritative room socket as `0x14` frames.
+The engine emits each received message as:
+
+```json
+{"type":"chat","name":"Player","text":"hello","system":false,"kind":0}
+```
+
+- `name` is empty for room/system notices (`system: true`); join notices use
+  `kind: 3`, ordinary player chat uses `kind: 0`.
+- The engine only emits messages received after joining; it does not fetch room
+  chat history.
+- Write from Rust with `engine.send_chat("hello")`, or send
+  `{"type":"chat","text":"hello"}` on engine stdin. The message is queued until
+  the room socket is joined, then sent as `0x14` plus a 96-byte NUL-padded UTF-8
+  field. Empty text is ignored; text is truncated safely at 96 bytes.
+- The CLI prints `chat Name: text` and `chat [room] text`. Repeat
+  `--chat <TEXT>` to send several messages after joining.
 
 ## Timeouts and disconnect handling
 

@@ -1056,10 +1056,82 @@ function onMatchStart() {
   if (flow.joined) emitRoom();
 }
 
+const CHAT_TYPE = 0x14;
+const CHAT_NAME_LEN = 24;
+const CHAT_TEXT_LEN = 96;
+const CHAT_TAIL_LEN = 9;
+const chatPending = [];
+
+function chatText(buf, start, len) {
+  const end = Math.min(buf.length, start + len);
+  if (start >= end) return '';
+  return buf.subarray(start, end).toString('utf8').replace(/\0[\s\S]*$/, '').trimEnd();
+}
+
+function parseChat(buf) {
+  if (buf.length < 1 + CHAT_NAME_LEN) return;
+  const name = chatText(buf, 1, CHAT_NAME_LEN);
+  const text = chatText(buf, 1 + CHAT_NAME_LEN, CHAT_TEXT_LEN);
+  if (!text) return;
+  const kind = buf.length > 1 + CHAT_NAME_LEN + CHAT_TEXT_LEN
+    ? buf[1 + CHAT_NAME_LEN + CHAT_TEXT_LEN] : 0;
+  const system = !name;
+  emit({ type: 'chat', name, text, system, kind });
+  log('chat', system ? '(room)' : name, text);
+}
+
+function queueChat(text) {
+  const msg = String(text == null ? '' : text).replace(/[\r\n]+/g, ' ').trim();
+  if (!msg) {
+    log('chat ignored: empty message');
+    return false;
+  }
+  const bytes = Buffer.from(msg, 'utf8');
+  let cut = Math.min(bytes.length, CHAT_TEXT_LEN);
+  // Do not split a multibyte UTF-8 sequence at the 96-byte boundary.
+  while (cut > 0 && cut < bytes.length && (bytes[cut] & 0xc0) === 0x80) cut--;
+  const pkt = Buffer.alloc(1 + CHAT_TEXT_LEN);
+  pkt[0] = CHAT_TYPE;
+  bytes.copy(pkt, 1, 0, cut);
+  if (chatPending.length >= 20) {
+    log('chat queue full; dropping message');
+    return false;
+  }
+  chatPending.push({ pkt, text: msg });
+  flushChat();
+  return true;
+}
+
+function flushChat() {
+  if (!roomSocket || roomSocket.readyState !== 1 || !flow.joined || !chatPending.length) return;
+  while (chatPending.length) {
+    const item = chatPending[0];
+    try {
+      const ab = item.pkt.buffer.slice(item.pkt.byteOffset,
+        item.pkt.byteOffset + item.pkt.byteLength);
+      roomSocket.send(ab);
+      chatPending.shift();
+      log('chat sent', item.text);
+    } catch (e) {
+      log('chat send error', String(e));
+      break;
+    }
+  }
+}
+
 function handleServerFrame(buf, wsId) {
   if (!buf || !buf.length) return;
   const type = buf[0];
   const roomId = roomSocket ? roomSocket.__rbId : null;
+  if (type === CHAT_TYPE) {
+    if (roomId && wsId && wsId !== roomId) {
+      log('ignoring chat frame from a non-room socket', wsId);
+      return;
+    }
+    if (!roomSocket && wsId) roomSocket = wsById.get(wsId) || null;
+    parseChat(buf);
+    return;
+  }
   if ((type === 0x41 || type === 0x42)) {
     if (roomId && wsId && wsId !== roomId) {
       log('ignoring match/fuel frame from a non-room socket', wsId);
@@ -2218,7 +2290,7 @@ function click(x, y) {
   // Always release: a canceled click must not leave the game with a held button.
   setTimeout(() => mouse('mouseup', x, y, 0, 0), 100);
 }
-globalThis.__ctl = { key, tapKey, mouse, click, canvas, Module, getMem: () => mem, wslog };
+globalThis.__ctl = { key, tapKey, mouse, click, canvas, Module, getMem: () => mem, wslog, chat: queueChat };
 
 function refreshPad() {
   try {
@@ -2602,6 +2674,7 @@ function onTrack(name, params) {
     }
     log('joined room', roomCode, 'host', host, 'role', p.role);
     emitRoom();
+    flushChat();
     if (lastRoom06) applyRoom06(lastRoom06);
     if (!seated) {
       failSpectator(`room_join role=${p.role}`);
@@ -2922,6 +2995,7 @@ rl.on('line', (line) => {
   let cmd;
   try { cmd = JSON.parse(s); } catch { log('bad command', s); return; }
   if (cmd.type === 'input') applyInput(cmd);
+  else if (cmd.type === 'chat') queueChat(cmd.text);
   else if (cmd.type === 'click') globalThis.__ctl.click(Number(cmd.x) || 0, Number(cmd.y) || 0);
   else if (cmd.type === 'drag') {
     const x1 = Number(cmd.x1) || 0, y1 = Number(cmd.y1) || 0;
